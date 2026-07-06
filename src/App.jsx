@@ -3,10 +3,10 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend
 } from "recharts";
-import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Cloud, HardDrive, LogOut, Mail, Lock } from "lucide-react";
+import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
-import { loadData as loadRemoteData, saveData as saveRemoteData, hasSupabase } from "./lib/storage.js";
-import { signUp, signIn, signOut, getSession, onAuthChange } from "./lib/auth.js";
+
+const STORAGE_KEY = "networth-ledger:data";
 
 // ---- palette: cream + blue ----
 const C = {
@@ -52,6 +52,13 @@ function freqLabelToKey(label) {
 }
 
 // ---- insurance ----
+// ---- top-level app sections ----
+const TABS = [
+  { id: "ledger", label: "สมุดบัญชี", icon: BookOpen },
+  { id: "insurance", label: "ประกันและความคุ้มครอง", icon: ShieldCheck },
+  { id: "tax", label: "วางแผนภาษี", icon: Calculator },
+];
+
 const INSURANCE_CATEGORIES = [
   { key: "life", label: "ประกันชีวิต", icon: Heart, group: "person" },
   { key: "health", label: "ประกันสุขภาพ", icon: Stethoscope, group: "person" },
@@ -120,27 +127,44 @@ function emptyTaxPlanning() {
 
 function emptyTaxPlanningContainer() {
   const year = String(new Date().getFullYear());
-  return { years: { [year]: emptyTaxPlanning() } };
+  return { people: { ตัวเอง: { years: { [year]: emptyTaxPlanning() } } } };
 }
 
-// merges with defaults, and migrates the old single-year shape into the
-// new { years: { "2569": {...} } } container so tax history across years can be tracked
+// merges with defaults, and migrates older shapes:
+//   flat single-year object -> { people: { ตัวเอง: { years: { ... } } } }
+//   { years: {...} } (single person, no name) -> { people: { ตัวเอง: { years: {...} } } }
+// so both tax history across years AND separate people can be tracked
 function ensureTaxPlanning(finalData) {
   const raw = finalData.taxPlanning;
-  if (!raw || !raw.years) {
-    const year = String(new Date().getFullYear());
-    if (raw && typeof raw === "object") {
-      // old flat single-year shape - migrate it in as the current year
-      finalData.taxPlanning = { years: { [year]: { ...emptyTaxPlanning(), ...raw } } };
+  const year = String(new Date().getFullYear());
+
+  if (!raw || (!raw.people && !raw.years)) {
+    if (raw && typeof raw === "object" && Object.keys(raw).length > 0) {
+      // very old flat single-year shape
+      finalData.taxPlanning = { people: { ตัวเอง: { years: { [year]: { ...emptyTaxPlanning(), ...raw } } } } };
     } else {
       finalData.taxPlanning = emptyTaxPlanningContainer();
     }
-  } else {
+  } else if (raw.years && !raw.people) {
+    // single-person { years: {...} } shape from before multi-person support
     const years = {};
     Object.keys(raw.years).forEach((y) => {
       years[y] = { ...emptyTaxPlanning(), ...raw.years[y] };
     });
-    finalData.taxPlanning = { years };
+    finalData.taxPlanning = { people: { ตัวเอง: { years } } };
+  } else {
+    const people = {};
+    Object.keys(raw.people).forEach((personName) => {
+      const years = {};
+      Object.keys(raw.people[personName]?.years || {}).forEach((y) => {
+        years[y] = { ...emptyTaxPlanning(), ...raw.people[personName].years[y] };
+      });
+      people[personName] = { years };
+    });
+    if (Object.keys(people).length === 0) {
+      people["ตัวเอง"] = { years: { [year]: emptyTaxPlanning() } };
+    }
+    finalData.taxPlanning = { people };
   }
   return finalData;
 }
@@ -339,7 +363,7 @@ function migrateIfNeeded(raw) {
   return null;
 }
 
-function LedgerApp({ userId, onSignOut }) {
+export default function NetWorthLedger() {
   const [data, setData] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -348,7 +372,6 @@ function LedgerApp({ userId, onSignOut }) {
   const [lastFailedData, setLastFailedData] = useState(null);
   const [lastSavedAt, setLastSavedAt] = useState(null);
   const [restoreNote, setRestoreNote] = useState(null);
-  const [storageSource, setStorageSource] = useState(null);
   const [importInputKey, setImportInputKey] = useState(0);
   const [importExcelInputKey, setImportExcelInputKey] = useState(0);
 
@@ -356,6 +379,7 @@ function LedgerApp({ userId, onSignOut }) {
   const [newQuarterInput, setNewQuarterInput] = useState("1");
   const [duplicateFrom, setDuplicateFrom] = useState("");
   const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
+  const [activeTab, setActiveTab] = useState("ledger");
   const [assetForm, setAssetForm] = useState({
     name: "",
     amount: "",
@@ -373,12 +397,19 @@ function LedgerApp({ userId, onSignOut }) {
   useEffect(() => {
     (async () => {
       try {
-        const { data: loaded, source } = await loadRemoteData(userId);
-        setStorageSource(source);
-
-        if (loaded && loaded.periods) {
-          const migrated = migrateIfNeeded(loaded) || loaded;
-          const finalData = ensureTaxPlanning(ensureInsurance(migrated));
+        if (!window.storage) {
+          setRestoreNote("no-storage");
+        }
+        let result = null;
+        try {
+          result = await window.storage.get(STORAGE_KEY, false);
+        } catch (e) {
+          result = null;
+        }
+        if (result && result.value) {
+          const parsedRaw = JSON.parse(result.value);
+          const migrated = migrateIfNeeded(parsedRaw);
+          const finalData = ensureTaxPlanning(ensureInsurance(migrated || { periods: {} }));
           if (Object.keys(finalData.periods).length === 0) {
             const now = new Date();
             const q = Math.floor(now.getMonth() / 3) + 1;
@@ -388,6 +419,9 @@ function LedgerApp({ userId, onSignOut }) {
           setRestoreNote("restored");
           const keys = Object.keys(finalData.periods).sort(comparePeriods);
           setSelectedPeriod(keys[keys.length - 1]);
+          if (migrated) {
+            window.storage.set(STORAGE_KEY, JSON.stringify(finalData), false).catch(() => {});
+          }
         } else {
           const now = new Date();
           const q = Math.floor(now.getMonth() / 3) + 1;
@@ -395,7 +429,7 @@ function LedgerApp({ userId, onSignOut }) {
           const fresh = { periods: { [key]: emptyPeriod() }, insurance: [], taxPlanning: emptyTaxPlanningContainer() };
           setData(fresh);
           setSelectedPeriod(key);
-          setRestoreNote("fresh");
+          setRestoreNote((prev) => prev || "fresh");
         }
       } catch (e) {
         setError("โหลดข้อมูลไม่สำเร็จ เริ่มสมุดบัญชีใหม่แทน");
@@ -408,27 +442,27 @@ function LedgerApp({ userId, onSignOut }) {
         setLoading(false);
       }
     })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, []);
 
-  async function persist(next) {
+  async function persist(next, attempt = 1) {
     setData(next);
     setSaving(true);
-    const result = await saveRemoteData(userId, next);
-    setStorageSource(result.source === "supabase" ? "supabase" : storageSource === "supabase" ? "local-fallback" : storageSource);
-    if (result.ok) {
+    try {
+      await window.storage.set(STORAGE_KEY, JSON.stringify(next), false);
       setError(null);
       setLastFailedData(null);
       setLastSavedAt(new Date());
-    } else {
-      setError(
-        hasSupabase()
-          ? "บันทึกขึ้นฐานข้อมูลไม่สำเร็จ (บันทึกในเครื่องไว้แล้ว) กดลองอีกครั้งด้านล่าง"
-          : "บันทึกไม่สำเร็จ กดลองอีกครั้งด้านล่าง"
-      );
+    } catch (e) {
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 350 * attempt));
+        setSaving(false);
+        return persist(next, attempt + 1);
+      }
+      setError("บันทึกข้อมูลไม่สำเร็จ กดลองอีกครั้งด้านล่าง หรือดาวน์โหลดข้อมูลสำรองไว้ก่อน");
       setLastFailedData(next);
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   function retrySave() {
@@ -527,46 +561,53 @@ function LedgerApp({ userId, onSignOut }) {
     );
 
     const ensuredTax = ensureTaxPlanning({ ...data }).taxPlanning;
-    const taxYearKeys = Object.keys(ensuredTax.years).sort((a, b) => Number(a) - Number(b));
-    const taxRows = taxYearKeys.map((y) => {
-      const t = ensuredTax.years[y];
-      const r = calcTaxPlan(t, data.insurance || []);
-      return {
-        ปีภาษี: y,
-        เงินได้รวมต่อปี: t.grossIncome,
-        รายได้เป็นเงินเดือน: t.isSalary ? "ใช่" : "ไม่ใช่",
-        มีคู่สมรส: t.spouse ? "ใช่" : "ไม่ใช่",
-        เบี้ยประกันชีวิตคู่สมรส: t.spouseLifeInsurance,
-        ค่าฝากครรภ์คลอดบุตร: t.pregnancyCost,
-        "บุตรคนแรก/ก่อนปี2561": t.childrenBase,
-        "บุตรคนที่2+/ปี2561+": t.childrenExtra,
-        บิดามารดาที่เลี้ยงดู: t.parents,
-        ผู้พิการที่เลี้ยงดู: t.disabledCare,
-        ประกันสังคม: t.socialSecurity,
-        ประกันสุขภาพบิดามารดา: t.parentHealthInsurance,
-        เบี้ยประกันชีวิตแบบบำนาญ: t.pensionLifeInsurance,
-        กองทุนสำรองเลี้ยงชีพ: t.providentFund,
-        กองทุนการออมแห่งชาติ: t.nationalSavingsFund,
-        กองทุนRMF: t.rmf,
-        กองทุนSSF: t.ssf,
-        วิสาหกิจเพื่อสังคม: t.socialEnterprise,
-        ThaiESG: t.thaiEsg,
-        ดอกเบี้ยที่อยู่อาศัย: t.mortgageInterest,
-        ค่าซื้องานศิลปะ: t.artPurchase,
-        SolarRooftop: t.solarRooftop,
-        บริจาคทั่วไป: t.donationsGeneral,
-        "บริจาคeDonation": t.donationsEDouble,
-        บริจาคพรรคการเมือง: t.donationsPolitical,
-        "ค่าลดหย่อนรวม(คำนวณ)": Math.round(r.totalDeductions),
-        "เงินได้สุทธิ(คำนวณ)": Math.round(r.taxableIncome),
-        "ภาษีที่ต้องจ่าย(คำนวณ)": Math.round(r.tax),
-        "อัตราเฉลี่ย%": Number((r.effectiveRate * 100).toFixed(2)),
-        "อัตราขั้นสูงสุด%": Number((r.marginal * 100).toFixed(0)),
-      };
+    const taxRows = [];
+    Object.keys(ensuredTax.people).forEach((person) => {
+      const years = ensuredTax.people[person].years || {};
+      Object.keys(years)
+        .sort((a, b) => Number(a) - Number(b))
+        .forEach((y) => {
+          const t = years[y];
+          const personInsurance = (data.insurance || []).filter((p) => p.person === person);
+          const r = calcTaxPlan(t, personInsurance);
+          taxRows.push({
+            บุคคล: person,
+            ปีภาษี: y,
+            เงินได้รวมต่อปี: t.grossIncome,
+            รายได้เป็นเงินเดือน: t.isSalary ? "ใช่" : "ไม่ใช่",
+            มีคู่สมรส: t.spouse ? "ใช่" : "ไม่ใช่",
+            เบี้ยประกันชีวิตคู่สมรส: t.spouseLifeInsurance,
+            ค่าฝากครรภ์คลอดบุตร: t.pregnancyCost,
+            "บุตรคนแรก/ก่อนปี2561": t.childrenBase,
+            "บุตรคนที่2+/ปี2561+": t.childrenExtra,
+            บิดามารดาที่เลี้ยงดู: t.parents,
+            ผู้พิการที่เลี้ยงดู: t.disabledCare,
+            ประกันสังคม: t.socialSecurity,
+            ประกันสุขภาพบิดามารดา: t.parentHealthInsurance,
+            เบี้ยประกันชีวิตแบบบำนาญ: t.pensionLifeInsurance,
+            กองทุนสำรองเลี้ยงชีพ: t.providentFund,
+            กองทุนการออมแห่งชาติ: t.nationalSavingsFund,
+            กองทุนRMF: t.rmf,
+            กองทุนSSF: t.ssf,
+            วิสาหกิจเพื่อสังคม: t.socialEnterprise,
+            ThaiESG: t.thaiEsg,
+            ดอกเบี้ยที่อยู่อาศัย: t.mortgageInterest,
+            ค่าซื้องานศิลปะ: t.artPurchase,
+            SolarRooftop: t.solarRooftop,
+            บริจาคทั่วไป: t.donationsGeneral,
+            "บริจาคeDonation": t.donationsEDouble,
+            บริจาคพรรคการเมือง: t.donationsPolitical,
+            "ค่าลดหย่อนรวม(คำนวณ)": Math.round(r.totalDeductions),
+            "เงินได้สุทธิ(คำนวณ)": Math.round(r.taxableIncome),
+            "ภาษีที่ต้องจ่าย(คำนวณ)": Math.round(r.tax),
+            "อัตราเฉลี่ย%": Number((r.effectiveRate * 100).toFixed(2)),
+            "อัตราขั้นสูงสุด%": Number((r.marginal * 100).toFixed(0)),
+          });
+        });
     });
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(taxRows.length ? taxRows : [{ ปีภาษี: "" }]),
+      XLSX.utils.json_to_sheet(taxRows.length ? taxRows : [{ บุคคล: "", ปีภาษี: "" }]),
       "ภาษี"
     );
 
@@ -680,13 +721,15 @@ function LedgerApp({ userId, onSignOut }) {
           });
         }
 
-        const taxYears = {};
+        const taxPeople = {};
         const taxSheet = wb.Sheets["ภาษี"];
         if (taxSheet) {
           XLSX.utils.sheet_to_json(taxSheet, { defval: "" }).forEach((r) => {
             const y = String(r["ปีภาษี"]).trim();
+            const person = String(r["บุคคล"] || "ตัวเอง").trim() || "ตัวเอง";
             if (!/^\d{4}$/.test(y)) return;
-            taxYears[y] = {
+            if (!taxPeople[person]) taxPeople[person] = { years: {} };
+            taxPeople[person].years[y] = {
               grossIncome: String(r["เงินได้รวมต่อปี"] ?? ""),
               isSalary: String(r["รายได้เป็นเงินเดือน"]).trim() === "ใช่",
               spouse: String(r["มีคู่สมรส"]).trim() === "ใช่",
@@ -715,7 +758,7 @@ function LedgerApp({ userId, onSignOut }) {
           });
         }
 
-        const next = { periods, insurance, taxPlanning: { years: taxYears } };
+        const next = { periods, insurance, taxPlanning: { people: taxPeople } };
         ensureTaxPlanning(next);
         persist(next);
         const keys = Object.keys(periods).sort(comparePeriods);
@@ -889,26 +932,51 @@ function LedgerApp({ userId, onSignOut }) {
     persist(next);
   }
 
-  function saveTaxYear(year, fields) {
-    const years = { ...(data.taxPlanning?.years || {}), [year]: fields };
-    persist({ ...data, taxPlanning: { years } });
+  function saveTaxYear(person, year, fields) {
+    const people = { ...(data.taxPlanning?.people || {}) };
+    const years = { ...(people[person]?.years || {}), [year]: fields };
+    people[person] = { years };
+    persist({ ...data, taxPlanning: { people } });
   }
 
-  function addTaxYear(year) {
-    if (!year || (data.taxPlanning?.years || {})[year]) return;
-    const years = { ...(data.taxPlanning?.years || {}), [year]: emptyTaxPlanning() };
-    persist({ ...data, taxPlanning: { years } });
+  function addTaxYear(person, year) {
+    if (!year) return;
+    const people = { ...(data.taxPlanning?.people || {}) };
+    const years = people[person]?.years || {};
+    if (years[year]) return;
+    people[person] = { years: { ...years, [year]: emptyTaxPlanning() } };
+    persist({ ...data, taxPlanning: { people } });
   }
 
-  function deleteTaxYear(year) {
-    const years = { ...(data.taxPlanning?.years || {}) };
+  function deleteTaxYear(person, year) {
+    const people = { ...(data.taxPlanning?.people || {}) };
+    const years = { ...(people[person]?.years || {}) };
     delete years[year];
-    persist({ ...data, taxPlanning: { years } });
+    people[person] = { years };
+    persist({ ...data, taxPlanning: { people } });
+  }
+
+  function addTaxPerson(name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const people = { ...(data.taxPlanning?.people || {}) };
+    if (people[trimmed]) return;
+    const year = String(new Date().getFullYear());
+    people[trimmed] = { years: { [year]: emptyTaxPlanning() } };
+    persist({ ...data, taxPlanning: { people } });
+  }
+
+  function deleteTaxPerson(name) {
+    const people = { ...(data.taxPlanning?.people || {}) };
+    if (Object.keys(people).length <= 1) return;
+    delete people[name];
+    persist({ ...data, taxPlanning: { people } });
   }
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+        <FontLoader />
         <Loader2 className="animate-spin" size={28} style={{ color: C.accent }} />
       </div>
     );
@@ -921,6 +989,7 @@ function LedgerApp({ userId, onSignOut }) {
       className="min-h-screen w-full app-font"
       style={{ background: C.bg, color: C.ink }}
     >
+      <FontLoader />
       <style>{`
         .app-font { font-family: 'Prompt', sans-serif; }
         .mono { font-family: 'Prompt', sans-serif; font-variant-numeric: tabular-nums; }
@@ -947,43 +1016,18 @@ function LedgerApp({ userId, onSignOut }) {
           <div>
             <div className="flex items-center gap-2 ui-sans text-xs tracking-[0.2em] uppercase" style={{ color: C.muted }}>
               <BookOpen size={14} />
-              สมุดบัญชีส่วนบุคคล · รายไตรมาส
+              การเงินส่วนบุคคลแบบภาพรวมสำหรับทุกคน
             </div>
             <h1 className="text-3xl md:text-4xl mt-1 font-medium" style={{ letterSpacing: "0.005em" }}>
-              สินทรัพย์ · หนี้สิน · ความมั่งคั่งสุทธิ
+              FinDash
             </h1>
           </div>
           <div className="text-right">
             <div className="ui-sans text-xs" style={{ color: saving ? C.accent : C.mutedLight }}>
               {saving ? "กำลังบันทึก…" : lastSavedAt ? `บันทึกล่าสุด ${lastSavedAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}` : "ยังไม่บันทึก"}
             </div>
-            <div className="ui-sans text-xs mt-0.5 flex items-center justify-end gap-1" style={{ color: C.mutedLight }}>
-              {storageSource === "supabase" ? (
-                <><Cloud size={11} /> ฐานข้อมูล (Supabase)</>
-              ) : (
-                <><HardDrive size={11} /> ในเครื่องนี้เท่านั้น</>
-              )}
-            </div>
-            {hasSupabase() && onSignOut && (
-              <button
-                onClick={onSignOut}
-                className="ui-sans text-xs mt-1 flex items-center justify-end gap-1 ml-auto"
-                style={{ color: C.muted }}
-              >
-                <LogOut size={11} /> ออกจากระบบ
-              </button>
-            )}
           </div>
         </div>
-
-        {!hasSupabase() && (
-          <div
-            className="mb-4 px-4 py-2.5 rounded ui-sans text-xs"
-            style={{ background: C.accentSoft, color: C.inkSoft, border: `1px solid ${C.border}` }}
-          >
-            ยังไม่ได้เชื่อมต่อฐานข้อมูล (Supabase) — ข้อมูลบันทึกอยู่ในเบราว์เซอร์นี้เท่านั้น ดูวิธีเชื่อมต่อได้ใน README.md
-          </div>
-        )}
 
         {restoreNote === "fresh" && (
           <div
@@ -1030,7 +1074,7 @@ function LedgerApp({ userId, onSignOut }) {
             <input key={importInputKey} type="file" accept="application/json" onChange={importBackup} className="hidden" />
           </label>
         </div>
-        <div className="ui-sans text-xs mb-6 -mt-6" style={{ color: C.mutedLight }}>
+        <div className="ui-sans text-xs mb-2" style={{ color: C.mutedLight }}>
           การอัปโหลด Excel หรือนำเข้าข้อมูลสำรองจะแทนที่ข้อมูลทั้งหมดในแอปด้วยข้อมูลจากไฟล์ที่เลือก
         </div>
 
@@ -1052,6 +1096,30 @@ function LedgerApp({ userId, onSignOut }) {
           </div>
         )}
 
+        {/* section tabs */}
+        <div className="flex flex-wrap gap-2 mb-8">
+          {TABS.map((t) => {
+            const TabIcon = t.icon;
+            const active = activeTab === t.id;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setActiveTab(t.id)}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-full ui-sans text-sm transition-colors"
+                style={{
+                  background: active ? C.ink : "transparent",
+                  color: active ? C.paper : C.inkSoft,
+                  border: `1px solid ${active ? C.ink : C.border}`,
+                }}
+              >
+                <TabIcon size={14} /> {t.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {activeTab === "ledger" && (
+        <>
         <div className="flex flex-wrap items-center gap-2 mb-8">
           {periodKeys.map((k) => {
             const isConfirming = confirmDeleteKey === k;
@@ -1287,30 +1355,40 @@ function LedgerApp({ userId, onSignOut }) {
             </div>
           </div>
         )}
+        </>
+        )}
 
-        <div className="mt-12">
+        {activeTab === "insurance" && (
           <InsuranceSection
             insurance={data.insurance || []}
             onSave={saveInsurance}
             onDelete={deleteInsurance}
           />
-        </div>
+        )}
 
-        <div className="mt-8">
+        {activeTab === "tax" && (
           <TaxPlanningSection
             insurance={data.insurance || []}
             taxPlanning={data.taxPlanning || emptyTaxPlanningContainer()}
             onSaveYear={saveTaxYear}
             onAddYear={addTaxYear}
             onDeleteYear={deleteTaxYear}
+            onAddPerson={addTaxPerson}
+            onDeletePerson={deleteTaxPerson}
           />
-        </div>
+        )}
 
         <div className="ui-sans text-xs mt-10 text-center" style={{ color: C.mutedLight }}>
           ข้อมูลถูกบันทึกไว้เฉพาะบัญชีของคุณเท่านั้น
         </div>
       </div>
     </div>
+  );
+}
+
+function FontLoader() {
+  return (
+    <style>{`@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap');`}</style>
   );
 }
 
@@ -1755,17 +1833,36 @@ function emptyInsuranceForm() {
 
 function InsuranceSection({ insurance, onSave, onDelete }) {
   const [filter, setFilter] = useState(null);
+  const [personFilter, setPersonFilter] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(emptyInsuranceForm());
   const [editingId, setEditingId] = useState(null);
 
-  const visible = filter ? insurance.filter((p) => p.category === filter) : insurance;
+  const personOptions = useMemo(() => {
+    const set = new Set();
+    insurance.forEach((p) => {
+      if (p.person) set.add(p.person);
+    });
+    return Array.from(set);
+  }, [insurance]);
+
+  const visible = insurance.filter(
+    (p) => (!filter || p.category === filter) && (!personFilter || p.person === personFilter)
+  );
 
   const totals = useMemo(() => {
     const coverage = insurance.reduce((s, p) => s + Number(p.coverageAmount || 0), 0);
     const premiumYear = insurance.reduce((s, p) => s + annualPremium(p), 0);
     return { count: insurance.length, coverage, premiumYear };
   }, [insurance]);
+
+  const filteredSummary = useMemo(() => {
+    if (!personFilter) return null;
+    const matched = insurance.filter((p) => p.person === personFilter);
+    const coverage = matched.reduce((s, p) => s + Number(p.coverageAmount || 0), 0);
+    const premiumYear = matched.reduce((s, p) => s + annualPremium(p), 0);
+    return { count: matched.length, coverage, premiumYear };
+  }, [personFilter, insurance]);
 
   function submit() {
     const meta = catMeta(form.category);
@@ -1857,8 +1954,39 @@ function InsuranceSection({ insurance, onSave, onDelete }) {
         </div>
       </div>
 
+      {/* person filter */}
+      {personOptions.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 mb-2">
+          <button
+            onClick={() => setPersonFilter(null)}
+            className="ui-sans text-xs px-2.5 py-1 rounded-full transition-colors"
+            style={{
+              background: personFilter === null ? C.ink : "transparent",
+              color: personFilter === null ? C.paper : C.muted,
+              border: `1px solid ${personFilter === null ? C.ink : C.border}`,
+            }}
+          >
+            ทุกคน
+          </button>
+          {personOptions.map((p) => (
+            <button
+              key={p}
+              onClick={() => setPersonFilter(p)}
+              className="ui-sans text-xs px-2.5 py-1 rounded-full flex items-center gap-1 transition-colors"
+              style={{
+                background: personFilter === p ? C.accent : "transparent",
+                color: personFilter === p ? "#FBFAF4" : C.muted,
+                border: `1px solid ${personFilter === p ? C.accent : C.border}`,
+              }}
+            >
+              <User size={10} /> {p}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* category filter */}
-      <div className="flex flex-wrap items-center gap-1.5 mb-4">
+      <div className="flex flex-wrap items-center gap-1.5 mb-2">
         <button
           onClick={() => setFilter(null)}
           className="ui-sans text-xs px-2.5 py-1 rounded-full transition-colors"
@@ -1868,7 +1996,7 @@ function InsuranceSection({ insurance, onSave, onDelete }) {
             border: `1px solid ${filter === null ? C.ink : C.border}`,
           }}
         >
-          ทั้งหมด
+          ทุกประเภท
         </button>
         {INSURANCE_CATEGORIES.map((c) => {
           const Icon = c.icon;
@@ -1888,6 +2016,15 @@ function InsuranceSection({ insurance, onSave, onDelete }) {
           );
         })}
       </div>
+
+      {filteredSummary && (
+        <div className="mb-4 px-3 py-2.5 rounded" style={{ background: C.accentSoft }}>
+          <div className="flex items-center justify-between ui-sans text-xs" style={{ color: C.inkSoft }}>
+            <span>{filteredSummary.count} กรมธรรม์ของ "{personFilter}"</span>
+            <span className="mono">ทุนประกัน ฿{THB(filteredSummary.coverage)} · เบี้ย/ปี ฿{THB(filteredSummary.premiumYear)}</span>
+          </div>
+        </div>
+      )}
 
       {/* add form */}
       {showForm && (
@@ -2112,59 +2249,92 @@ function InsuranceSection({ insurance, onSave, onDelete }) {
   );
 }
 
-function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onDeleteYear }) {
+function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onDeleteYear, onAddPerson, onDeletePerson }) {
+  const personKeys = useMemo(() => Object.keys(taxPlanning.people), [taxPlanning]);
+  const [selectedPerson, setSelectedPerson] = useState(personKeys[0] || "ตัวเอง");
+  const [newPersonInput, setNewPersonInput] = useState("");
+
+  // keep selectedPerson valid if people are added/removed elsewhere
+  useEffect(() => {
+    if (personKeys.length > 0 && !personKeys.includes(selectedPerson)) {
+      setSelectedPerson(personKeys[0]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personKeys]);
+
+  // only this person's insurance policies count toward their tax deductions
+  const personInsurance = useMemo(
+    () => insurance.filter((p) => p.person === selectedPerson),
+    [insurance, selectedPerson]
+  );
+
+  const personYears = taxPlanning.people[selectedPerson]?.years || {};
   const yearKeys = useMemo(
-    () => Object.keys(taxPlanning.years).sort((a, b) => Number(a) - Number(b)),
-    [taxPlanning]
+    () => Object.keys(personYears).sort((a, b) => Number(a) - Number(b)),
+    [personYears]
   );
   const [selectedYear, setSelectedYear] = useState(yearKeys[yearKeys.length - 1] || String(new Date().getFullYear()));
   const [newYearInput, setNewYearInput] = useState("");
-  const [form, setForm] = useState(taxPlanning.years[selectedYear] || emptyTaxPlanning());
+  const [form, setForm] = useState(personYears[selectedYear] || emptyTaxPlanning());
 
-  // keep selectedYear valid if years are added/removed elsewhere
+  // keep selectedYear valid when switching person or when years change
   useEffect(() => {
-    if (yearKeys.length > 0 && !yearKeys.includes(selectedYear)) {
-      setSelectedYear(yearKeys[yearKeys.length - 1]);
+    const keys = Object.keys(taxPlanning.people[selectedPerson]?.years || {}).sort((a, b) => Number(a) - Number(b));
+    if (keys.length > 0 && !keys.includes(selectedYear)) {
+      setSelectedYear(keys[keys.length - 1]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yearKeys]);
+  }, [selectedPerson, taxPlanning]);
 
-  // reload the form whenever the selected year changes
+  // reload the form whenever the selected person or year changes
   useEffect(() => {
-    setForm(taxPlanning.years[selectedYear] || emptyTaxPlanning());
+    setForm(taxPlanning.people[selectedPerson]?.years?.[selectedYear] || emptyTaxPlanning());
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedYear]);
+  }, [selectedPerson, selectedYear]);
 
   // debounce writes back to the ledger so we don't persist on every keystroke
   useEffect(() => {
     const t = setTimeout(() => {
-      const stored = taxPlanning.years[selectedYear];
+      const stored = taxPlanning.people[selectedPerson]?.years?.[selectedYear];
       if (JSON.stringify(form) !== JSON.stringify(stored)) {
-        onSaveYear(selectedYear, form);
+        onSaveYear(selectedPerson, selectedYear, form);
       }
     }, 700);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
 
-  const result = useMemo(() => calcTaxPlan(form, insurance), [form, insurance]);
+  const result = useMemo(() => calcTaxPlan(form, personInsurance), [form, personInsurance]);
 
   const history = useMemo(
-    () => yearKeys.map((y) => ({ year: y, result: calcTaxPlan(taxPlanning.years[y], insurance) })),
-    [yearKeys, taxPlanning, insurance]
+    () => yearKeys.map((y) => ({ year: y, result: calcTaxPlan(personYears[y], personInsurance) })),
+    [yearKeys, personYears, personInsurance]
   );
 
   function set(key, value) {
     setForm((f) => ({ ...f, [key]: value }));
   }
 
+  function addPerson() {
+    const name = newPersonInput.trim();
+    if (!name) return;
+    onAddPerson(name);
+    setSelectedPerson(name);
+    setNewPersonInput("");
+  }
+
+  function deletePersonHandler() {
+    if (personKeys.length <= 1) return;
+    onDeletePerson(selectedPerson);
+  }
+
   function addYear() {
     const y = newYearInput.trim();
     if (!/^\d{4}$/.test(y)) return;
-    if (taxPlanning.years[y]) {
+    if (personYears[y]) {
       setSelectedYear(y);
     } else {
-      onAddYear(y);
+      onAddYear(selectedPerson, y);
       setSelectedYear(y);
     }
     setNewYearInput("");
@@ -2172,7 +2342,7 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
 
   function deleteYear() {
     if (yearKeys.length <= 1) return;
-    onDeleteYear(selectedYear);
+    onDeleteYear(selectedPerson, selectedYear);
   }
 
   const field = (label, key, placeholder, capNote) => (
@@ -2202,14 +2372,60 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
       </div>
       <div className="ui-sans text-xs mb-5 flex items-start gap-1.5" style={{ color: C.muted }}>
         <Info size={13} className="mt-0.5 flex-shrink-0" />
-        ประมาณการภาษีเงินได้บุคคลธรรมดารายปี อ้างอิงเพดานค่าลดหย่อนตามเกณฑ์ทั่วไป
+        ประมาณการภาษีเงินได้บุคคลธรรมดารายปีแยกตามบุคคล อ้างอิงเพดานค่าลดหย่อนตามเกณฑ์ทั่วไป
         ไม่ใช่คำแนะนำทางภาษีอย่างเป็นทางการ กรุณาตรวจสอบกับผู้เชี่ยวชาญหรือกรมสรรพากรก่อนตัดสินใจจริง
       </div>
+
+      {/* person filter/selector */}
+      <div className="ui-sans text-xs uppercase tracking-wide mb-2" style={{ color: C.muted }}>บุคคล</div>
+      <div className="flex flex-wrap items-center gap-2 mb-2">
+        {personKeys.map((p) => (
+          <button
+            key={p}
+            onClick={() => setSelectedPerson(p)}
+            className="ui-sans px-3 py-1.5 rounded-full text-sm flex items-center gap-1 transition-colors"
+            style={{
+              background: p === selectedPerson ? C.ink : "transparent",
+              color: p === selectedPerson ? C.paper : C.inkSoft,
+              border: `1px solid ${p === selectedPerson ? C.ink : C.border}`,
+            }}
+          >
+            <User size={12} /> {p}
+          </button>
+        ))}
+        <div className="flex items-center gap-1 ml-1">
+          <input
+            value={newPersonInput}
+            onChange={(e) => setNewPersonInput(e.target.value)}
+            placeholder="ชื่อคน เช่น พ่อ, แม่"
+            className="ui-sans w-32 px-2 py-1.5 rounded text-sm bg-transparent"
+            style={{ border: `1px solid ${C.border}` }}
+            onKeyDown={(e) => e.key === "Enter" && addPerson()}
+          />
+          <button
+            onClick={addPerson}
+            className="p-1.5 rounded ui-sans"
+            style={{ border: `1px solid ${C.border}`, color: C.inkSoft }}
+            aria-label="เพิ่มบุคคล"
+          >
+            <Plus size={16} />
+          </button>
+        </div>
+      </div>
+      {personKeys.length > 1 && (
+        <button
+          onClick={deletePersonHandler}
+          className="ui-sans text-xs mb-5 flex items-center gap-1"
+          style={{ color: C.muted }}
+        >
+          <Trash2 size={12} /> ลบข้อมูลภาษีทั้งหมดของ {selectedPerson}
+        </button>
+      )}
 
       {/* year history */}
       {history.length > 0 && (
         <div className="mb-5">
-          <div className="ui-sans text-xs uppercase tracking-wide mb-2" style={{ color: C.muted }}>ประวัติภาษีรายปี</div>
+          <div className="ui-sans text-xs uppercase tracking-wide mb-2" style={{ color: C.muted }}>ประวัติภาษีรายปีของ {selectedPerson}</div>
           <div className="rounded overflow-hidden" style={{ border: `1px solid ${C.border}` }}>
             <table className="w-full ui-sans text-xs" style={{ borderCollapse: "collapse" }}>
               <thead>
@@ -2330,12 +2546,12 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
 
       <div className="mb-3 p-3 rounded" style={{ background: C.accentSoft }}>
         <div className="flex items-center justify-between ui-sans text-xs" style={{ color: C.inkSoft }}>
-          <span className="flex items-center gap-1"><ShieldCheck size={12} /> ประกันชีวิต/สุขภาพตัวเอง (ดึงจากโมดูลประกันอัตโนมัติ)</span>
+          <span className="flex items-center gap-1"><ShieldCheck size={12} /> ประกันชีวิต/สุขภาพของ "{selectedPerson}" (ดึงจากโมดูลประกันอัตโนมัติ)</span>
           <span className="mono">฿{THB(result.lifeHealthTotal)}</span>
         </div>
         <div className="ui-sans text-xs mt-1" style={{ color: C.mutedLight }}>
-          รวมกันหักได้ไม่เกิน 100,000 บาท (ส่วนสุขภาพหักได้ไม่เกิน 25,000 บาท) —
-          ยังหักได้อีก ฿{THB(result.lifeHealthRoomLeft)}
+          ต้องตั้งชื่อ "ผู้เอาประกัน" ในโมดูลประกันให้ตรงกับ "{selectedPerson}" ระบบถึงจะดึงมาคำนวณให้ —
+          รวมกันหักได้ไม่เกิน 100,000 บาท (ส่วนสุขภาพหักได้ไม่เกิน 25,000 บาท) ยังหักได้อีก ฿{THB(result.lifeHealthRoomLeft)}
         </div>
       </div>
 
@@ -2486,175 +2702,5 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
         </table>
       </div>
     </div>
-  );
-}
-
-function AuthScreen({ onSignedIn }) {
-  const [mode, setMode] = useState("signin"); // "signin" | "signup"
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
-
-  async function submit(e) {
-    e.preventDefault();
-    setError(null);
-    setNotice(null);
-    if (!email.trim() || !password) {
-      setError("กรอกอีเมลและรหัสผ่านให้ครบ");
-      return;
-    }
-    setBusy(true);
-    try {
-      if (mode === "signup") {
-        const { data, error: err } = await signUp(email.trim(), password);
-        if (err) throw err;
-        if (data?.session) {
-          onSignedIn(data.session);
-        } else {
-          setNotice("สมัครสำเร็จ — เช็คอีเมลเพื่อกดยืนยันบัญชีก่อนเข้าสู่ระบบ (ถ้าโปรเจกต์ Supabase เปิดใช้การยืนยันอีเมลไว้)");
-        }
-      } else {
-        const { data, error: err } = await signIn(email.trim(), password);
-        if (err) throw err;
-        onSignedIn(data.session);
-      }
-    } catch (err) {
-      setError(err.message === "Invalid login credentials" ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง" : err.message || "เกิดข้อผิดพลาด");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div
-      className="min-h-screen w-full app-font flex items-center justify-center px-5"
-      style={{ background: C.bg, color: C.ink }}
-    >
-      <style>{`
-        .app-font { font-family: 'Prompt', sans-serif; }
-        .mono { font-family: 'Prompt', sans-serif; font-variant-numeric: tabular-nums; }
-        .ui-sans { font-family: 'Prompt', sans-serif; }
-        .paper-card {
-          background: ${C.paper};
-          border: 1px solid ${C.border};
-          box-shadow: 0 1px 0 ${C.border}, 0 8px 20px -12px rgba(32,70,92,0.18);
-        }
-        input:focus, button:focus-visible {
-          outline: 2px solid ${C.accent};
-          outline-offset: 1px;
-        }
-      `}</style>
-
-      <div className="paper-card rounded-lg p-6 md:p-8 w-full max-w-sm">
-        <div className="flex items-center gap-2 mb-1">
-          <BookOpen size={18} style={{ color: C.accent }} />
-          <h1 className="text-xl font-medium">สมุดบัญชีส่วนบุคคล</h1>
-        </div>
-        <div className="ui-sans text-xs mb-6" style={{ color: C.muted }}>
-          {mode === "signin" ? "เข้าสู่ระบบเพื่อเปิดข้อมูลของคุณ" : "สมัครสมาชิกเพื่อเริ่มเก็บข้อมูลของตัวเอง"}
-        </div>
-
-        <form onSubmit={submit} className="space-y-3">
-          <div>
-            <label className="ui-sans text-xs flex items-center gap-1 mb-1" style={{ color: C.muted }}>
-              <Mail size={11} /> อีเมล
-            </label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
-              style={{ border: `1px solid ${C.border}` }}
-              autoComplete="email"
-            />
-          </div>
-          <div>
-            <label className="ui-sans text-xs flex items-center gap-1 mb-1" style={{ color: C.muted }}>
-              <Lock size={11} /> รหัสผ่าน
-            </label>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
-              style={{ border: `1px solid ${C.border}` }}
-              autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            />
-          </div>
-
-          {error && (
-            <div className="ui-sans text-xs px-3 py-2 rounded" style={{ background: C.errorBg, color: C.errorText }}>
-              {error}
-            </div>
-          )}
-          {notice && (
-            <div className="ui-sans text-xs px-3 py-2 rounded" style={{ background: C.accentSoft, color: C.inkSoft }}>
-              {notice}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={busy}
-            className="w-full flex items-center justify-center gap-1.5 py-2 rounded ui-sans text-sm"
-            style={{ background: C.accent, color: "#FBFAF4", opacity: busy ? 0.7 : 1 }}
-          >
-            {busy ? <Loader2 size={16} className="animate-spin" /> : null}
-            {mode === "signin" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
-          </button>
-        </form>
-
-        <button
-          onClick={() => {
-            setMode((m) => (m === "signin" ? "signup" : "signin"));
-            setError(null);
-            setNotice(null);
-          }}
-          className="ui-sans text-xs mt-4 w-full text-center"
-          style={{ color: C.muted }}
-        >
-          {mode === "signin" ? "ยังไม่มีบัญชี? สมัครสมาชิก" : "มีบัญชีอยู่แล้ว? เข้าสู่ระบบ"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-export default function App() {
-  const [session, setSession] = useState(hasSupabase() ? undefined : null);
-
-  useEffect(() => {
-    if (!hasSupabase()) return;
-    getSession().then(setSession);
-    const unsubscribe = onAuthChange((s) => setSession(s));
-    return unsubscribe;
-  }, []);
-
-  if (!hasSupabase()) {
-    return <LedgerApp userId={null} onSignOut={null} />;
-  }
-
-  if (session === undefined) {
-    return (
-      <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
-        <Loader2 className="animate-spin" size={28} style={{ color: C.accent }} />
-      </div>
-    );
-  }
-
-  if (session === null) {
-    return <AuthScreen onSignedIn={setSession} />;
-  }
-
-  return (
-    <LedgerApp
-      userId={session.user.id}
-      onSignOut={async () => {
-        await signOut();
-        setSession(null);
-      }}
-    />
   );
 }
