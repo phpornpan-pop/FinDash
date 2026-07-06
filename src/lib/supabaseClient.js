@@ -1,18 +1,17 @@
-// Supabase client setup.
-//
-// Reads VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY from `.env` (see
-// .env.example). If either is missing, `supabase` is null and the rest of
-// the app falls back to browser-only localStorage - so the project still
-// works before you've set up a Supabase project.
-
 import { createClient } from "@supabase/supabase-js";
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "";
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || "";
+// อ่านค่าจาก Environment Variables ของ Vite
+// ต้องตั้งชื่อขึ้นต้นด้วย VITE_ เท่านั้น ถึงจะถูกอ่านเข้ามาได้
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+// สร้าง client เฉพาะตอนที่มีค่าครบ ป้องกัน error ตอนไม่ได้ตั้งค่า
 export const supabase =
-  SUPABASE_URL && SUPABASE_ANON_KEY ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+  supabaseUrl && supabaseAnonKey
+    ? createClient(supabaseUrl, supabaseAnonKey)
+    : null;
 
+// ใช้เช็คว่าระบบนี้เปิดใช้ Supabase อยู่หรือไม่ (แอปจะ fallback เป็นโหมด Offline ถ้าไม่มี)
 export function hasSupabase() {
-  return Boolean(supabase);
+  return supabase !== null;
 }
