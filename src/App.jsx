@@ -6,8 +6,8 @@ import {
 import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
 
-// ➕ Import Supabase Client
-import { supabase, hasSupabase } from "./supabaseClient"; // 👈 เปลี่ยน path ให้ตรงกับตำแหน่งไฟล์ในเครื่องคุณ
+// 🛠️ แก้ไข Path การ Import ตัวเชื่อมต่อให้ตรงกับโครงสร้างโฟลเดอร์ของคุณเรียบร้อยแล้ว
+import { supabase, hasSupabase } from "../supabase/supabase"; 
 
 const STORAGE_KEY = "networth-ledger:data";
 
@@ -384,16 +384,16 @@ export default function NetWorthLedger() {
   // ➕ State เก็บข้อมูลผู้เข้าสู่ระบบ
   const [user, setUser] = useState(null);
 
-  // ➕ useEffect เช็คและดักฟังข้อมูล Auth สมาชิกออนไลน์
+  // ➕ useEffect ตรวจสอบสิทธิ์และดักฟังข้อมูลการล็อกอิน
   useEffect(() => {
     if (!hasSupabase()) return;
 
-    // เช็คสเตตัสตอนโหลดแอปครั้งแรก
+    // ตรวจหาบัญชีผู้ใช้เมื่อเปิดหน้าจอ
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
     });
 
-    // ฟังการเปลี่ยนแปรง Login / Logout
+    // ดักฟังเหตุการณ์ล็อกอินเข้า/ออกจากระบบ
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
     });
@@ -401,7 +401,7 @@ export default function NetWorthLedger() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ➕ ฟังก์ชันออกจากระบบ
+  // ➕ ฟังก์ชันเคลียร์เซสชันเพื่อออกจากระบบ
   const handleLogout = async () => {
     if (hasSupabase()) {
       await supabase.auth.signOut();
@@ -1025,7 +1025,7 @@ export default function NetWorthLedger() {
       `}</style>
 
       <div className="max-w-5xl mx-auto px-5 py-10 md:py-14">
-        {/* 🛠️ แก้ไขพื้นที่แสดงสเตตัสล็อกอินมุมขวาบนในบล็อก Header */}
+        {/* 🛠️ แก้ไขสเตตัสล็อกอินขวาบนในบล็อก Header */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <div className="flex items-center gap-2 ui-sans text-xs tracking-[0.2em] uppercase" style={{ color: C.muted }}>
@@ -1041,7 +1041,7 @@ export default function NetWorthLedger() {
               {saving ? "กำลังบันทึก…" : lastSavedAt ? `บันทึกล่าสุด ${lastSavedAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}` : "ยังไม่บันทึก"}
             </div>
             
-            {/* ดักเช็คเงื่อนไข: ล็อกอินออนไลน์ / โหมดออฟไลน์บราวเซอร์ / มีระบบออนไลน์แต่ยังไม่ล็อกอิน */}
+            {/* ดักเช็คเงื่อนไข UI: ล็อกอินออนไลน์ / โหมดออฟไลน์บราวเซอร์ / มีระบบออนไลน์แต่ยังไม่ล็อกอิน */}
             {user ? (
               <div className="flex items-center gap-2 mt-1 ui-sans text-xs">
                 <span className="px-2.5 py-1 rounded-full flex items-center gap-1 font-medium" style={{ background: C.accentSoft, color: C.ink }}>
