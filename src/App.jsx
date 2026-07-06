@@ -3,9 +3,10 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend
 } from "recharts";
-import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Cloud, HardDrive } from "lucide-react";
+import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Cloud, HardDrive, LogOut, Mail, Lock } from "lucide-react";
 import * as XLSX from "xlsx";
-import { loadData as loadRemoteData, saveData as saveRemoteData, hasRemote } from "./lib/storage.js";
+import { loadData as loadRemoteData, saveData as saveRemoteData, hasSupabase } from "./lib/storage.js";
+import { signUp, signIn, signOut, getSession, onAuthChange } from "./lib/auth.js";
 
 // ---- palette: cream + blue ----
 const C = {
@@ -338,7 +339,7 @@ function migrateIfNeeded(raw) {
   return null;
 }
 
-export default function NetWorthLedger() {
+function LedgerApp({ userId, onSignOut }) {
   const [data, setData] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -372,7 +373,7 @@ export default function NetWorthLedger() {
   useEffect(() => {
     (async () => {
       try {
-        const { data: loaded, source } = await loadRemoteData();
+        const { data: loaded, source } = await loadRemoteData(userId);
         setStorageSource(source);
 
         if (loaded && loaded.periods) {
@@ -407,21 +408,22 @@ export default function NetWorthLedger() {
         setLoading(false);
       }
     })();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
 
   async function persist(next) {
     setData(next);
     setSaving(true);
-    const result = await saveRemoteData(next);
-    setStorageSource(result.source === "sheets" ? "sheets" : storageSource === "sheets" ? "local-fallback" : storageSource);
+    const result = await saveRemoteData(userId, next);
+    setStorageSource(result.source === "supabase" ? "supabase" : storageSource === "supabase" ? "local-fallback" : storageSource);
     if (result.ok) {
       setError(null);
       setLastFailedData(null);
       setLastSavedAt(new Date());
     } else {
       setError(
-        hasRemote()
-          ? "บันทึกไป Google Sheets ไม่สำเร็จ (บันทึกในเครื่องไว้แล้ว) กดลองอีกครั้งด้านล่าง"
+        hasSupabase()
+          ? "บันทึกขึ้นฐานข้อมูลไม่สำเร็จ (บันทึกในเครื่องไว้แล้ว) กดลองอีกครั้งด้านล่าง"
           : "บันทึกไม่สำเร็จ กดลองอีกครั้งด้านล่าง"
       );
       setLastFailedData(next);
@@ -956,21 +958,30 @@ export default function NetWorthLedger() {
               {saving ? "กำลังบันทึก…" : lastSavedAt ? `บันทึกล่าสุด ${lastSavedAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}` : "ยังไม่บันทึก"}
             </div>
             <div className="ui-sans text-xs mt-0.5 flex items-center justify-end gap-1" style={{ color: C.mutedLight }}>
-              {storageSource === "sheets" ? (
-                <><Cloud size={11} /> Google Sheets</>
+              {storageSource === "supabase" ? (
+                <><Cloud size={11} /> ฐานข้อมูล (Supabase)</>
               ) : (
                 <><HardDrive size={11} /> ในเครื่องนี้เท่านั้น</>
               )}
             </div>
+            {hasSupabase() && onSignOut && (
+              <button
+                onClick={onSignOut}
+                className="ui-sans text-xs mt-1 flex items-center justify-end gap-1 ml-auto"
+                style={{ color: C.muted }}
+              >
+                <LogOut size={11} /> ออกจากระบบ
+              </button>
+            )}
           </div>
         </div>
 
-        {!hasRemote() && (
+        {!hasSupabase() && (
           <div
             className="mb-4 px-4 py-2.5 rounded ui-sans text-xs"
             style={{ background: C.accentSoft, color: C.inkSoft, border: `1px solid ${C.border}` }}
           >
-            ยังไม่ได้เชื่อมต่อ Google Sheets — ข้อมูลบันทึกอยู่ในเบราว์เซอร์นี้เท่านั้น ดูวิธีเชื่อมต่อได้ใน README.md
+            ยังไม่ได้เชื่อมต่อฐานข้อมูล (Supabase) — ข้อมูลบันทึกอยู่ในเบราว์เซอร์นี้เท่านั้น ดูวิธีเชื่อมต่อได้ใน README.md
           </div>
         )}
 
@@ -2475,5 +2486,175 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
         </table>
       </div>
     </div>
+  );
+}
+
+function AuthScreen({ onSignedIn }) {
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError(null);
+    setNotice(null);
+    if (!email.trim() || !password) {
+      setError("กรอกอีเมลและรหัสผ่านให้ครบ");
+      return;
+    }
+    setBusy(true);
+    try {
+      if (mode === "signup") {
+        const { data, error: err } = await signUp(email.trim(), password);
+        if (err) throw err;
+        if (data?.session) {
+          onSignedIn(data.session);
+        } else {
+          setNotice("สมัครสำเร็จ — เช็คอีเมลเพื่อกดยืนยันบัญชีก่อนเข้าสู่ระบบ (ถ้าโปรเจกต์ Supabase เปิดใช้การยืนยันอีเมลไว้)");
+        }
+      } else {
+        const { data, error: err } = await signIn(email.trim(), password);
+        if (err) throw err;
+        onSignedIn(data.session);
+      }
+    } catch (err) {
+      setError(err.message === "Invalid login credentials" ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง" : err.message || "เกิดข้อผิดพลาด");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      className="min-h-screen w-full app-font flex items-center justify-center px-5"
+      style={{ background: C.bg, color: C.ink }}
+    >
+      <style>{`
+        .app-font { font-family: 'Prompt', sans-serif; }
+        .mono { font-family: 'Prompt', sans-serif; font-variant-numeric: tabular-nums; }
+        .ui-sans { font-family: 'Prompt', sans-serif; }
+        .paper-card {
+          background: ${C.paper};
+          border: 1px solid ${C.border};
+          box-shadow: 0 1px 0 ${C.border}, 0 8px 20px -12px rgba(32,70,92,0.18);
+        }
+        input:focus, button:focus-visible {
+          outline: 2px solid ${C.accent};
+          outline-offset: 1px;
+        }
+      `}</style>
+
+      <div className="paper-card rounded-lg p-6 md:p-8 w-full max-w-sm">
+        <div className="flex items-center gap-2 mb-1">
+          <BookOpen size={18} style={{ color: C.accent }} />
+          <h1 className="text-xl font-medium">สมุดบัญชีส่วนบุคคล</h1>
+        </div>
+        <div className="ui-sans text-xs mb-6" style={{ color: C.muted }}>
+          {mode === "signin" ? "เข้าสู่ระบบเพื่อเปิดข้อมูลของคุณ" : "สมัครสมาชิกเพื่อเริ่มเก็บข้อมูลของตัวเอง"}
+        </div>
+
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="ui-sans text-xs flex items-center gap-1 mb-1" style={{ color: C.muted }}>
+              <Mail size={11} /> อีเมล
+            </label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
+              style={{ border: `1px solid ${C.border}` }}
+              autoComplete="email"
+            />
+          </div>
+          <div>
+            <label className="ui-sans text-xs flex items-center gap-1 mb-1" style={{ color: C.muted }}>
+              <Lock size={11} /> รหัสผ่าน
+            </label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
+              style={{ border: `1px solid ${C.border}` }}
+              autoComplete={mode === "signup" ? "new-password" : "current-password"}
+            />
+          </div>
+
+          {error && (
+            <div className="ui-sans text-xs px-3 py-2 rounded" style={{ background: C.errorBg, color: C.errorText }}>
+              {error}
+            </div>
+          )}
+          {notice && (
+            <div className="ui-sans text-xs px-3 py-2 rounded" style={{ background: C.accentSoft, color: C.inkSoft }}>
+              {notice}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={busy}
+            className="w-full flex items-center justify-center gap-1.5 py-2 rounded ui-sans text-sm"
+            style={{ background: C.accent, color: "#FBFAF4", opacity: busy ? 0.7 : 1 }}
+          >
+            {busy ? <Loader2 size={16} className="animate-spin" /> : null}
+            {mode === "signin" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+          </button>
+        </form>
+
+        <button
+          onClick={() => {
+            setMode((m) => (m === "signin" ? "signup" : "signin"));
+            setError(null);
+            setNotice(null);
+          }}
+          className="ui-sans text-xs mt-4 w-full text-center"
+          style={{ color: C.muted }}
+        >
+          {mode === "signin" ? "ยังไม่มีบัญชี? สมัครสมาชิก" : "มีบัญชีอยู่แล้ว? เข้าสู่ระบบ"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(hasSupabase() ? undefined : null);
+
+  useEffect(() => {
+    if (!hasSupabase()) return;
+    getSession().then(setSession);
+    const unsubscribe = onAuthChange((s) => setSession(s));
+    return unsubscribe;
+  }, []);
+
+  if (!hasSupabase()) {
+    return <LedgerApp userId={null} onSignOut={null} />;
+  }
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+        <Loader2 className="animate-spin" size={28} style={{ color: C.accent }} />
+      </div>
+    );
+  }
+
+  if (session === null) {
+    return <AuthScreen onSignedIn={setSession} />;
+  }
+
+  return (
+    <LedgerApp
+      userId={session.user.id}
+      onSignOut={async () => {
+        await signOut();
+        setSession(null);
+      }}
+    />
   );
 }
