@@ -6,6 +6,9 @@ import {
 import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
 
+// ➕ Import Supabase Client
+import { supabase, hasSupabase } from "./supabaseClient"; // 👈 เปลี่ยน path ให้ตรงกับตำแหน่งไฟล์ในเครื่องคุณ
+
 const STORAGE_KEY = "networth-ledger:data";
 
 // ---- palette: cream + blue ----
@@ -130,23 +133,17 @@ function emptyTaxPlanningContainer() {
   return { people: { ตัวเอง: { years: { [year]: emptyTaxPlanning() } } } };
 }
 
-// merges with defaults, and migrates older shapes:
-//   flat single-year object -> { people: { ตัวเอง: { years: { ... } } } }
-//   { years: {...} } (single person, no name) -> { people: { ตัวเอง: { years: {...} } } }
-// so both tax history across years AND separate people can be tracked
 function ensureTaxPlanning(finalData) {
   const raw = finalData.taxPlanning;
   const year = String(new Date().getFullYear());
 
   if (!raw || (!raw.people && !raw.years)) {
     if (raw && typeof raw === "object" && Object.keys(raw).length > 0) {
-      // very old flat single-year shape
       finalData.taxPlanning = { people: { ตัวเอง: { years: { [year]: { ...emptyTaxPlanning(), ...raw } } } } };
     } else {
       finalData.taxPlanning = emptyTaxPlanningContainer();
     }
   } else if (raw.years && !raw.people) {
-    // single-person { years: {...} } shape from before multi-person support
     const years = {};
     Object.keys(raw.years).forEach((y) => {
       years[y] = { ...emptyTaxPlanning(), ...raw.years[y] };
@@ -169,7 +166,6 @@ function ensureTaxPlanning(finalData) {
   return finalData;
 }
 
-// ปีภาษี 2569 (2026) - อัตราก้าวหน้าตามกฎหมาย (ไม่เปลี่ยนแปลงจากปีก่อนหน้า)
 const TAX_BRACKETS = [
   { upto: 150000, rate: 0 },
   { upto: 300000, rate: 0.05 },
@@ -193,13 +189,11 @@ function computeBracketBreakdown(taxable) {
   });
 }
 
-// อ้างอิงเพดานค่าลดหย่อนปีภาษี 2569 ตามเอกสารสรุปที่ผู้ใช้แนบมา
 function calcTaxPlan(input, insuranceList) {
   const income = parseFloat(input.grossIncome) || 0;
   const expenseDeduction = input.isSalary ? Math.min(income * 0.5, 100000) : 0;
   const netAfterExpense = Math.max(0, income - expenseDeduction);
 
-  // ส่วนตัวและครอบครัว
   const personal = 60000;
   const spouseDeduction = input.spouse ? 60000 : 0;
   const pregnancyCost = Math.min(Math.max(0, parseFloat(input.pregnancyCost) || 0), 60000);
@@ -211,7 +205,6 @@ function calcTaxPlan(input, insuranceList) {
   const disabledCount = Math.max(0, parseInt(input.disabledCare) || 0);
   const disabledDeduction = disabledCount * 60000;
 
-  // ประกันชีวิต/สุขภาพ
   const socialSecurity = Math.min(Math.max(0, parseFloat(input.socialSecurity) || 0), 10500);
   const parentHealthInsurance = Math.min(Math.max(0, parseFloat(input.parentHealthInsurance) || 0), 15000);
   const spouseLifeInsurance = Math.min(Math.max(0, parseFloat(input.spouseLifeInsurance) || 0), 10000);
@@ -222,7 +215,6 @@ function calcTaxPlan(input, insuranceList) {
   const lifeDeduction = Math.min(lifeSum, Math.max(0, 100000 - healthDeduction));
   const lifeHealthTotal = healthDeduction + lifeDeduction;
 
-  // ลงทุนและเกษียณ - กลุ่มที่รวมกันไม่เกิน 500,000 บาท
   const pensionLifeRaw = Math.max(0, parseFloat(input.pensionLifeInsurance) || 0);
   const pensionLifeCapped = Math.min(pensionLifeRaw, income * 0.15, 200000);
   const providentRaw = Math.max(0, parseFloat(input.providentFund) || 0);
@@ -244,11 +236,9 @@ function calcTaxPlan(input, insuranceList) {
   const ssf = ssfCapped * retirementScale;
   const retirementTotal = pensionLife + providentFund + nsf + rmf + ssf;
 
-  // กองทุนกลุ่มแยก (ไม่รวมในเพดาน 500,000 ด้านบน)
   const socialEnterprise = Math.min(Math.max(0, parseFloat(input.socialEnterprise) || 0), 30000);
   const thaiEsg = Math.min(Math.max(0, parseFloat(input.thaiEsg) || 0), income * 0.3, 300000);
 
-  // มาตรการรัฐ
   const mortgageInterest = Math.min(Math.max(0, parseFloat(input.mortgageInterest) || 0), 100000);
   const artPurchase = Math.min(Math.max(0, parseFloat(input.artPurchase) || 0), 100000);
   const solarRooftop = Math.min(Math.max(0, parseFloat(input.solarRooftop) || 0), 200000);
@@ -337,20 +327,17 @@ function formatPeriodShort(key) {
   return `${year} Q${quarter}`;
 }
 
-// reverse of formatPeriodShort - parses "2026 Q2" (from an uploaded Excel sheet) back into "2026-Q2"
 function periodLabelToKey(label) {
   const m = String(label || "").match(/(\d{4})\s*Q\s*([1-4])/i);
   if (!m) return null;
   return periodKey(m[1], m[2]);
 }
 
-// reverse of catMeta().label - maps a Thai category label back to its category key
 function categoryLabelToKey(label) {
   const found = INSURANCE_CATEGORIES.find((c) => c.label === String(label || "").trim());
   return found ? found.key : "life";
 }
 
-// migrate legacy { years: { "2026": {assets,liabilities} } } -> { periods: { "2026-Q4": {...} } }
 function migrateIfNeeded(raw) {
   if (raw && raw.periods) return raw;
   if (raw && raw.years) {
@@ -393,6 +380,33 @@ export default function NetWorthLedger() {
   const [liabForm, setLiabForm] = useState({ name: "", amount: "", owner: "" });
   const [assetEditingId, setAssetEditingId] = useState(null);
   const [liabEditingId, setLiabEditingId] = useState(null);
+
+  // ➕ State เก็บข้อมูลผู้เข้าสู่ระบบ
+  const [user, setUser] = useState(null);
+
+  // ➕ useEffect เช็คและดักฟังข้อมูล Auth สมาชิกออนไลน์
+  useEffect(() => {
+    if (!hasSupabase()) return;
+
+    // เช็คสเตตัสตอนโหลดแอปครั้งแรก
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      setUser(user);
+    });
+
+    // ฟังการเปลี่ยนแปรง Login / Logout
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // ➕ ฟังก์ชันออกจากระบบ
+  const handleLogout = async () => {
+    if (hasSupabase()) {
+      await supabase.auth.signOut();
+    }
+  };
 
   useEffect(() => {
     (async () => {
@@ -782,7 +796,6 @@ export default function NetWorthLedger() {
     if (periodKeys.length > 0 && !periodKeys.includes(duplicateFrom)) {
       setDuplicateFrom(periodKeys[periodKeys.length - 1]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [periodKeys]);
 
   const current = data && selectedPeriod ? data.periods[selectedPeriod] : null;
@@ -1012,6 +1025,7 @@ export default function NetWorthLedger() {
       `}</style>
 
       <div className="max-w-5xl mx-auto px-5 py-10 md:py-14">
+        {/* 🛠️ แก้ไขพื้นที่แสดงสเตตัสล็อกอินมุมขวาบนในบล็อก Header */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
             <div className="flex items-center gap-2 ui-sans text-xs tracking-[0.2em] uppercase" style={{ color: C.muted }}>
@@ -1022,10 +1036,34 @@ export default function NetWorthLedger() {
               FinDash
             </h1>
           </div>
-          <div className="text-right">
+          <div className="text-right flex flex-col items-end gap-1.5">
             <div className="ui-sans text-xs" style={{ color: saving ? C.accent : C.mutedLight }}>
               {saving ? "กำลังบันทึก…" : lastSavedAt ? `บันทึกล่าสุด ${lastSavedAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}` : "ยังไม่บันทึก"}
             </div>
+            
+            {/* ดักเช็คเงื่อนไข: ล็อกอินออนไลน์ / โหมดออฟไลน์บราวเซอร์ / มีระบบออนไลน์แต่ยังไม่ล็อกอิน */}
+            {user ? (
+              <div className="flex items-center gap-2 mt-1 ui-sans text-xs">
+                <span className="px-2.5 py-1 rounded-full flex items-center gap-1 font-medium" style={{ background: C.accentSoft, color: C.ink }}>
+                  <User size={12} /> {user.email}
+                </span>
+                <button 
+                  onClick={handleLogout} 
+                  className="underline hover:text-red-500 transition-colors"
+                  style={{ color: C.muted }}
+                >
+                  ออกจากระบบ
+                </button>
+              </div>
+            ) : !hasSupabase() ? (
+              <span className="ui-sans text-xs px-2.5 py-1 rounded mt-1 font-medium" style={{ background: C.border, color: C.inkSoft }}>
+                โหมดใช้งานบนบราวเซอร์ (Offline)
+              </span>
+            ) : (
+              <span className="ui-sans text-xs mt-1 font-medium" style={{ color: C.liability }}>
+                ยังไม่ได้เข้าสู่ระบบ
+              </span>
+            )}
           </div>
         </div>
 
@@ -2254,15 +2292,12 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
   const [selectedPerson, setSelectedPerson] = useState(personKeys[0] || "ตัวเอง");
   const [newPersonInput, setNewPersonInput] = useState("");
 
-  // keep selectedPerson valid if people are added/removed elsewhere
   useEffect(() => {
     if (personKeys.length > 0 && !personKeys.includes(selectedPerson)) {
       setSelectedPerson(personKeys[0]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [personKeys]);
 
-  // only this person's insurance policies count toward their tax deductions
   const personInsurance = useMemo(
     () => insurance.filter((p) => p.person === selectedPerson),
     [insurance, selectedPerson]
@@ -2277,22 +2312,17 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
   const [newYearInput, setNewYearInput] = useState("");
   const [form, setForm] = useState(personYears[selectedYear] || emptyTaxPlanning());
 
-  // keep selectedYear valid when switching person or when years change
   useEffect(() => {
     const keys = Object.keys(taxPlanning.people[selectedPerson]?.years || {}).sort((a, b) => Number(a) - Number(b));
     if (keys.length > 0 && !keys.includes(selectedYear)) {
       setSelectedYear(keys[keys.length - 1]);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPerson, taxPlanning]);
 
-  // reload the form whenever the selected person or year changes
   useEffect(() => {
     setForm(taxPlanning.people[selectedPerson]?.years?.[selectedYear] || emptyTaxPlanning());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPerson, selectedYear]);
 
-  // debounce writes back to the ledger so we don't persist on every keystroke
   useEffect(() => {
     const t = setTimeout(() => {
       const stored = taxPlanning.people[selectedPerson]?.years?.[selectedYear];
@@ -2301,7 +2331,6 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
       }
     }, 700);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form]);
 
   const result = useMemo(() => calcTaxPlan(form, personInsurance), [form, personInsurance]);
