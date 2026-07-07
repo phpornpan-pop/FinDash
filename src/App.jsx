@@ -1077,12 +1077,8 @@ export default function NetWorthLedger() {
         {/* 🛠️ แก้ไขสเตตัสล็อกอินขวาบนในบล็อก Header */}
         <div className="flex items-start justify-between gap-4 mb-6">
           <div>
-            <div className="flex items-center gap-2 ui-sans text-xs tracking-[0.2em] uppercase" style={{ color: C.muted }}>
-              <BookOpen size={14} />
-              การเงินส่วนบุคคลแบบภาพรวมสำหรับทุกคน
-            </div>
-            <h1 className="text-3xl md:text-4xl mt-1 font-medium" style={{ letterSpacing: "0.005em" }}>
-              FinDash
+            <h1 className="text-3xl md:text-4xl font-medium" style={{ letterSpacing: "0.005em" }}>
+              FinDash <span style={{ color: C.inkSoft }}>การเงินส่วนบุคคลแบบภาพรวมสำหรับทุกคน</span>
             </h1>
           </div>
           <div className="text-right flex flex-col items-end gap-1.5">
