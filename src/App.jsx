@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend
@@ -438,14 +438,22 @@ export default function NetWorthLedger() {
     if (hasSupabase()) {
       await supabase.auth.signOut();
     }
+    loadedUserIdRef.current = null;
     setData(null);
     setSelectedPeriod(null);
     setLoading(true);
   };
 
   // ➕ โหลดข้อมูลของผู้ใช้คนนี้จากตาราง ledger_data ใน Supabase (ข้อมูลผูกกับบัญชี ไม่ใช่เครื่อง)
+  // สำคัญ: ใช้ user?.id (string) เป็น dependency แทนที่จะใช้ user (object) ตรงๆ
+  // เพราะ Supabase จะรีเฟรช session/token เบื้องหลังเป็นระยะ ทุกครั้งที่รีเฟรชจะได้ user object
+  // ตัวใหม่เสมอ (แม้จะเป็นคนเดิม) ถ้า dependency เป็น object ตรงๆ จะทำให้ effect นี้ทำงานซ้ำ
+  // ทุกครั้งที่ token รีเฟรช แล้วเผลอไปรีเซ็ตข้อมูล/ฟอร์มที่ยังพิมพ์ค้างไว้ไม่ทันได้บันทึก
+  const loadedUserIdRef = useRef(null);
   useEffect(() => {
     if (!user) return;
+    if (loadedUserIdRef.current === user.id) return; // คนเดิม ไม่ต้องโหลดซ้ำ (กันบั๊ก token refresh ล้างข้อมูลที่ยังไม่ได้บันทึก)
+    loadedUserIdRef.current = user.id;
     setLoading(true);
     (async () => {
       try {
@@ -2570,6 +2578,12 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
     setForm(taxPlanning.people[selectedPerson]?.years?.[selectedYear] || emptyTaxPlanning());
   }, [selectedPerson, selectedYear]);
 
+  // ➕ เก็บค่าฟอร์มล่าสุดไว้ใน ref เพื่อใช้ตอน flush (บันทึกทันที) ตอนสลับบุคคล/ปี/ออกจากแท็บ
+  const formRef = useRef(form);
+  useEffect(() => {
+    formRef.current = form;
+  }, [form]);
+
   useEffect(() => {
     const t = setTimeout(() => {
       const stored = taxPlanning.people[selectedPerson]?.years?.[selectedYear];
@@ -2579,6 +2593,18 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
     }, 700);
     return () => clearTimeout(t);
   }, [form]);
+
+  // ➕ ป้องกันข้อมูลหาย: ถ้าสลับ "บุคคล"/"ปีภาษี" หรือออกจากแท็บนี้ก่อนที่ออโต้เซฟด้านบน (700ms) จะทันทำงาน
+  // ให้บันทึกค่าล่าสุดที่พิมพ์ค้างไว้ทันที แทนที่จะปล่อยให้หายไปเงียบๆ
+  useEffect(() => {
+    return () => {
+      const latestForm = formRef.current;
+      const stored = taxPlanning.people[selectedPerson]?.years?.[selectedYear];
+      if (JSON.stringify(latestForm) !== JSON.stringify(stored)) {
+        onSaveYear(selectedPerson, selectedYear, latestForm);
+      }
+    };
+  }, [selectedPerson, selectedYear]);
 
   const result = useMemo(() => calcTaxPlan(form, personInsurance), [form, personInsurance]);
 
