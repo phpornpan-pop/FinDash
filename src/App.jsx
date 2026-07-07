@@ -414,14 +414,14 @@ export default function NetWorthLedger() {
     setLoading(true);
   };
 
-  // ➕ โหลดข้อมูลของผู้ใช้คนนี้จากตาราง networth_data ใน Supabase (ข้อมูลผูกกับบัญชี ไม่ใช่เครื่อง)
+  // ➕ โหลดข้อมูลของผู้ใช้คนนี้จากตาราง ledger_data ใน Supabase (ข้อมูลผูกกับบัญชี ไม่ใช่เครื่อง)
   useEffect(() => {
     if (!user) return;
     setLoading(true);
     (async () => {
       try {
         const { data: row, error: fetchError } = await supabase
-          .from("networth_data")
+          .from("ledger_data")
           .select("data")
           .eq("user_id", user.id)
           .maybeSingle();
@@ -442,7 +442,7 @@ export default function NetWorthLedger() {
           setSelectedPeriod(keys[keys.length - 1]);
           if (migrated) {
             supabase
-              .from("networth_data")
+              .from("ledger_data")
               .upsert({ user_id: user.id, data: finalData, updated_at: new Date().toISOString() })
               .then(() => {});
           }
@@ -474,7 +474,7 @@ export default function NetWorthLedger() {
     setSaving(true);
     try {
       const { error: saveError } = await supabase
-        .from("networth_data")
+        .from("ledger_data")
         .upsert({ user_id: user.id, data: next, updated_at: new Date().toISOString() });
       if (saveError) throw saveError;
       setError(null);
