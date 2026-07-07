@@ -113,6 +113,8 @@ function emptyTaxPlanning() {
     parentHealthInsurance: "",
     pensionLifeInsurance: "",
     providentFund: "",
+    govPensionFund: "",
+    teacherWelfareFund: "",
     nationalSavingsFund: "",
     rmf: "",
     ssf: "",
@@ -121,6 +123,11 @@ function emptyTaxPlanning() {
     mortgageInterest: "",
     artPurchase: "",
     solarRooftop: "",
+    easyReceipt: "",
+    domesticTravel: "",
+    newHomeConstruction: "",
+    floodHomeRepair: "",
+    floodCarRepair: "",
     donationsGeneral: "",
     donationsEDouble: "",
     donationsPolitical: "",
@@ -218,6 +225,10 @@ function calcTaxPlan(input, insuranceList) {
   const pensionLifeCapped = Math.min(pensionLifeRaw, income * 0.15, 200000);
   const providentRaw = Math.max(0, parseFloat(input.providentFund) || 0);
   const providentCapped = Math.min(providentRaw, income * 0.15, 500000);
+  const govPensionRaw = Math.max(0, parseFloat(input.govPensionFund) || 0);
+  const govPensionCapped = Math.min(govPensionRaw, income * 0.15, 500000);
+  const teacherWelfareRaw = Math.max(0, parseFloat(input.teacherWelfareFund) || 0);
+  const teacherWelfareCapped = Math.min(teacherWelfareRaw, income * 0.15, 500000);
   const nsfRaw = Math.max(0, parseFloat(input.nationalSavingsFund) || 0);
   const nsfCapped = Math.min(nsfRaw, 30000);
   const rmfRaw = Math.max(0, parseFloat(input.rmf) || 0);
@@ -225,15 +236,17 @@ function calcTaxPlan(input, insuranceList) {
   const ssfRaw = Math.max(0, parseFloat(input.ssf) || 0);
   const ssfCapped = Math.min(ssfRaw, income * 0.3, 200000);
 
-  const retirementRawTotal = pensionLifeCapped + providentCapped + nsfCapped + rmfCapped + ssfCapped;
+  const retirementRawTotal = pensionLifeCapped + providentCapped + govPensionCapped + teacherWelfareCapped + nsfCapped + rmfCapped + ssfCapped;
   const retirementCap = 500000;
   const retirementScale = retirementRawTotal > retirementCap ? retirementCap / retirementRawTotal : 1;
   const pensionLife = pensionLifeCapped * retirementScale;
   const providentFund = providentCapped * retirementScale;
+  const govPensionFund = govPensionCapped * retirementScale;
+  const teacherWelfareFund = teacherWelfareCapped * retirementScale;
   const nsf = nsfCapped * retirementScale;
   const rmf = rmfCapped * retirementScale;
   const ssf = ssfCapped * retirementScale;
-  const retirementTotal = pensionLife + providentFund + nsf + rmf + ssf;
+  const retirementTotal = pensionLife + providentFund + govPensionFund + teacherWelfareFund + nsf + rmf + ssf;
 
   const socialEnterprise = Math.min(Math.max(0, parseFloat(input.socialEnterprise) || 0), 30000);
   const thaiEsg = Math.min(Math.max(0, parseFloat(input.thaiEsg) || 0), income * 0.3, 300000);
@@ -241,6 +254,11 @@ function calcTaxPlan(input, insuranceList) {
   const mortgageInterest = Math.min(Math.max(0, parseFloat(input.mortgageInterest) || 0), 100000);
   const artPurchase = Math.min(Math.max(0, parseFloat(input.artPurchase) || 0), 100000);
   const solarRooftop = Math.min(Math.max(0, parseFloat(input.solarRooftop) || 0), 200000);
+  const easyReceipt = Math.min(Math.max(0, parseFloat(input.easyReceipt) || 0), 50000);
+  const domesticTravel = Math.min(Math.max(0, parseFloat(input.domesticTravel) || 0), 15000);
+  const newHomeConstruction = Math.min(Math.max(0, parseFloat(input.newHomeConstruction) || 0), 100000);
+  const floodHomeRepair = Math.min(Math.max(0, parseFloat(input.floodHomeRepair) || 0), 100000);
+  const floodCarRepair = Math.min(Math.max(0, parseFloat(input.floodCarRepair) || 0), 30000);
 
   const donationsPolitical = Math.min(Math.max(0, parseFloat(input.donationsPolitical) || 0), 10000);
 
@@ -248,7 +266,9 @@ function calcTaxPlan(input, insuranceList) {
     personal + spouseDeduction + pregnancyCost + childrenDeduction + parentsDeduction + disabledDeduction +
     socialSecurity + parentHealthInsurance + spouseLifeInsurance + lifeHealthTotal +
     retirementTotal + socialEnterprise + thaiEsg +
-    mortgageInterest + artPurchase + solarRooftop + donationsPolitical;
+    mortgageInterest + artPurchase + solarRooftop +
+    easyReceipt + domesticTravel + newHomeConstruction + floodHomeRepair + floodCarRepair +
+    donationsPolitical;
 
   const incomeBeforeDonation = Math.max(0, netAfterExpense - preDonationDeductions);
   const donationsGeneralRaw = Math.max(0, parseFloat(input.donationsGeneral) || 0);
@@ -283,6 +303,8 @@ function calcTaxPlan(input, insuranceList) {
     healthSum,
     pensionLife,
     providentFund,
+    govPensionFund,
+    teacherWelfareFund,
     nsf,
     rmf,
     ssf,
@@ -292,6 +314,11 @@ function calcTaxPlan(input, insuranceList) {
     mortgageInterest,
     artPurchase,
     solarRooftop,
+    easyReceipt,
+    domesticTravel,
+    newHomeConstruction,
+    floodHomeRepair,
+    floodCarRepair,
     donations,
     donationsPolitical,
     totalDeductions,
@@ -616,6 +643,8 @@ export default function NetWorthLedger() {
             ประกันสุขภาพบิดามารดา: t.parentHealthInsurance,
             เบี้ยประกันชีวิตแบบบำนาญ: t.pensionLifeInsurance,
             กองทุนสำรองเลี้ยงชีพ: t.providentFund,
+            "กบข.": t.govPensionFund,
+            กองทุนครูโรงเรียนเอกชน: t.teacherWelfareFund,
             กองทุนการออมแห่งชาติ: t.nationalSavingsFund,
             กองทุนRMF: t.rmf,
             กองทุนSSF: t.ssf,
@@ -624,6 +653,11 @@ export default function NetWorthLedger() {
             ดอกเบี้ยที่อยู่อาศัย: t.mortgageInterest,
             ค่าซื้องานศิลปะ: t.artPurchase,
             SolarRooftop: t.solarRooftop,
+            "EasyE-Receipt": t.easyReceipt,
+            ค่าท่องเที่ยวในประเทศ: t.domesticTravel,
+            ค่าจ้างก่อสร้างบ้านใหม่: t.newHomeConstruction,
+            ค่าซ่อมบ้านอุทกภัย: t.floodHomeRepair,
+            ค่าซ่อมรถอุทกภัย: t.floodCarRepair,
             บริจาคทั่วไป: t.donationsGeneral,
             "บริจาคeDonation": t.donationsEDouble,
             บริจาคพรรคการเมือง: t.donationsPolitical,
@@ -773,6 +807,8 @@ export default function NetWorthLedger() {
               parentHealthInsurance: String(r["ประกันสุขภาพบิดามารดา"] ?? ""),
               pensionLifeInsurance: String(r["เบี้ยประกันชีวิตแบบบำนาญ"] ?? ""),
               providentFund: String(r["กองทุนสำรองเลี้ยงชีพ"] ?? ""),
+              govPensionFund: String(r["กบข."] ?? ""),
+              teacherWelfareFund: String(r["กองทุนครูโรงเรียนเอกชน"] ?? ""),
               nationalSavingsFund: String(r["กองทุนการออมแห่งชาติ"] ?? ""),
               rmf: String(r["กองทุนRMF"] ?? ""),
               ssf: String(r["กองทุนSSF"] ?? ""),
@@ -781,6 +817,11 @@ export default function NetWorthLedger() {
               mortgageInterest: String(r["ดอกเบี้ยที่อยู่อาศัย"] ?? ""),
               artPurchase: String(r["ค่าซื้องานศิลปะ"] ?? ""),
               solarRooftop: String(r["SolarRooftop"] ?? ""),
+              easyReceipt: String(r["EasyE-Receipt"] ?? ""),
+              domesticTravel: String(r["ค่าท่องเที่ยวในประเทศ"] ?? ""),
+              newHomeConstruction: String(r["ค่าจ้างก่อสร้างบ้านใหม่"] ?? ""),
+              floodHomeRepair: String(r["ค่าซ่อมบ้านอุทกภัย"] ?? ""),
+              floodCarRepair: String(r["ค่าซ่อมรถอุทกภัย"] ?? ""),
               donationsGeneral: String(r["บริจาคทั่วไป"] ?? ""),
               donationsEDouble: String(r["บริจาคeDonation"] ?? ""),
               donationsPolitical: String(r["บริจาคพรรคการเมือง"] ?? ""),
@@ -2795,14 +2836,18 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
       <div className="grid sm:grid-cols-3 gap-3 mb-3">
         {field("กองทุน RMF", "rmf", "เช่น 50000", "30% ของเงินได้ ไม่เกิน 500,000")}
         {field("เบี้ยประกันชีวิตแบบบำนาญ", "pensionLifeInsurance", "เช่น 30000", "15% ของเงินได้ ไม่เกิน 200,000")}
-        {field("กองทุนสำรองเลี้ยงชีพ/กบข.", "providentFund", "เช่น 50000", "15% ของเงินได้ ไม่เกิน 500,000")}
+        {field("กองทุนสำรองเลี้ยงชีพ (PVD)", "providentFund", "เช่น 50000", "15% ของเงินได้ ไม่เกิน 500,000")}
+      </div>
+      <div className="grid sm:grid-cols-3 gap-3 mb-3">
+        {field("กบข. (ข้าราชการ)", "govPensionFund", "เช่น 30000", "15% ของเงินได้ ไม่เกิน 500,000")}
+        {field("กองทุนสงเคราะห์ครูโรงเรียนเอกชน", "teacherWelfareFund", "เช่น 20000", "15% ของเงินได้ ไม่เกิน 500,000")}
+        {field("กองทุน SSF", "ssf", "เช่น 50000", "30% ของเงินได้ ไม่เกิน 200,000")}
       </div>
       <div className="grid sm:grid-cols-2 gap-3 mb-2">
-        {field("กองทุน SSF", "ssf", "เช่น 50000", "30% ของเงินได้ ไม่เกิน 200,000")}
         {field("กองทุนการออมแห่งชาติ (กอช.)", "nationalSavingsFund", "เช่น 10000", "ไม่เกิน 30,000 บาท")}
       </div>
       <div className="mb-4 ui-sans text-xs" style={{ color: C.mutedLight }}>
-        กลุ่มนี้ทั้งหมด (RMF + เบี้ยบำนาญ + กองทุนสำรองเลี้ยงชีพ + SSF + กอช) รวมกันหักได้ไม่เกิน 500,000 บาท —
+        กลุ่มนี้ทั้งหมด (RMF + เบี้ยบำนาญ + กองทุนสำรองเลี้ยงชีพ/กบข./กองทุนครูเอกชน + SSF + กอช) รวมกันหักได้ไม่เกิน 500,000 บาท —
         ยังหักได้อีก ฿{THB(result.retirementRoomLeft)}
       </div>
       <div className="grid sm:grid-cols-2 gap-3 mb-3">
@@ -2816,6 +2861,15 @@ function TaxPlanningSection({ insurance, taxPlanning, onSaveYear, onAddYear, onD
         {field("ดอกเบี้ยเงินกู้ที่อยู่อาศัย", "mortgageInterest", "เช่น 60000", "ไม่เกิน 100,000 บาท")}
         {field("ค่าซื้องานศิลปะ (2568-2570)", "artPurchase", "เช่น 20000", "ไม่เกิน 100,000 บาท")}
         {field("ติดตั้ง Solar Rooftop (2569-2571)", "solarRooftop", "เช่น 50000", "ไม่เกิน 200,000 บาท")}
+      </div>
+      <div className="grid sm:grid-cols-3 gap-3 mb-3">
+        {field("Easy E-Receipt / ช้อปดีมีคืน", "easyReceipt", "เช่น 30000", "วงเงินเปลี่ยนทุกปี ตรวจสอบก่อนกรอก โดยประมาณไม่เกิน 50,000 บาท")}
+        {field("ค่าท่องเที่ยวภายในประเทศ", "domesticTravel", "เช่น 10000", "วงเงินเปลี่ยนทุกปี โดยประมาณไม่เกิน 15,000 บาท")}
+        {field("ค่าจ้างก่อสร้างบ้านใหม่", "newHomeConstruction", "เช่น 50000", "ล้านละ 10,000 บาท โดยประมาณไม่เกิน 100,000 บาท")}
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3 mb-3">
+        {field("ค่าซ่อมบ้านจากอุทกภัย", "floodHomeRepair", "เช่น 40000", "เฉพาะปีที่มีมาตรการ ไม่เกิน 100,000 บาท")}
+        {field("ค่าซ่อมรถจากอุทกภัย", "floodCarRepair", "เช่น 10000", "เฉพาะปีที่มีมาตรการ ไม่เกิน 30,000 บาท")}
       </div>
 
       {/* เงินบริจาค */}
