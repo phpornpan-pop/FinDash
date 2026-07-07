@@ -3,7 +3,7 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend
 } from "recharts";
-import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet } from "lucide-react";
+import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Eye, EyeOff } from "lucide-react";
 import * as XLSX from "xlsx";
 
 // 🛠️ แก้ไข path ให้ตรงกับตำแหน่งไฟล์จริงใน repo: src/lib/supabaseClient.js
@@ -365,6 +365,7 @@ export default function NetWorthLedger() {
   const [duplicateFrom, setDuplicateFrom] = useState("");
   const [confirmDeleteKey, setConfirmDeleteKey] = useState(null);
   const [activeTab, setActiveTab] = useState("ledger");
+  const [hideNumbers, setHideNumbers] = useState(false);
   const [assetForm, setAssetForm] = useState({
     name: "",
     amount: "",
@@ -1305,14 +1306,23 @@ export default function NetWorthLedger() {
 
         {current && (
           <>
-            <div className="paper-card rounded-lg p-6 md:p-8 mb-10 ledger-lines">
+            <div className="paper-card rounded-lg p-6 md:p-8 mb-10 ledger-lines relative">
+              <button
+                onClick={() => setHideNumbers((v) => !v)}
+                className="absolute top-4 right-4 md:top-6 md:right-6 p-2 rounded-full transition-colors"
+                style={{ background: C.accentSoft, color: C.inkSoft }}
+                aria-label={hideNumbers ? "แสดงตัวเลข" : "ซ่อนตัวเลข"}
+                title={hideNumbers ? "แสดงตัวเลข" : "ซ่อนตัวเลข"}
+              >
+                {hideNumbers ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
                 <div>
                   <div className="ui-sans text-xs tracking-[0.2em] uppercase mb-1" style={{ color: C.muted }}>
                     ความมั่งคั่งสุทธิ {formatPeriodShort(selectedPeriod)}
                   </div>
                   <div className="mono text-4xl md:text-5xl font-medium" style={{ color: C.ink }}>
-                    ฿{THB(totals.net)}
+                    {hideNumbers ? "฿••••••" : `฿${THB(totals.net)}`}
                   </div>
                   {delta !== null && (
                     <div
@@ -1320,19 +1330,25 @@ export default function NetWorthLedger() {
                       style={{ color: delta >= 0 ? C.asset : C.liability }}
                     >
                       {delta >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                      {delta >= 0 ? "+" : ""}
-                      {THB(delta)} จาก {formatPeriodShort(prevPeriodNet.key)}
+                      {hideNumbers ? (
+                        "••••"
+                      ) : (
+                        <>
+                          {delta >= 0 ? "+" : ""}
+                          {THB(delta)} จาก {formatPeriodShort(prevPeriodNet.key)}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
                 <div className="flex gap-8">
                   <div>
                     <div className="ui-sans text-xs uppercase tracking-wide" style={{ color: C.asset }}>สินทรัพย์รวม</div>
-                    <div className="mono text-xl">฿{THB(totals.assets)}</div>
+                    <div className="mono text-xl">{hideNumbers ? "฿••••••" : `฿${THB(totals.assets)}`}</div>
                   </div>
                   <div>
                     <div className="ui-sans text-xs uppercase tracking-wide" style={{ color: C.liability }}>หนี้สินรวม</div>
-                    <div className="mono text-xl">฿{THB(totals.liabilities)}</div>
+                    <div className="mono text-xl">{hideNumbers ? "฿••••••" : `฿${THB(totals.liabilities)}`}</div>
                   </div>
                 </div>
               </div>
@@ -1358,6 +1374,7 @@ export default function NetWorthLedger() {
                 editingId={assetEditingId}
                 onEditStart={startEditAsset}
                 onCancelEdit={cancelEditAsset}
+                hideNumbers={hideNumbers}
               />
               <LedgerColumn
                 title="หนี้สิน"
@@ -1370,6 +1387,7 @@ export default function NetWorthLedger() {
                 editingId={liabEditingId}
                 onEditStart={startEditLiab}
                 onCancelEdit={cancelEditLiab}
+                hideNumbers={hideNumbers}
               />
             </div>
           </>
@@ -1617,13 +1635,13 @@ function LoginScreen() {
   );
 }
 
-function LedgerColumn({ title, accent, items, form, setForm, onAdd, onDelete, editingId, onEditStart, onCancelEdit }) {
+function LedgerColumn({ title, accent, items, form, setForm, onAdd, onDelete, editingId, onEditStart, onCancelEdit, hideNumbers }) {
   const total = items.reduce((s, i) => s + Number(i.amount || 0), 0);
   return (
     <div className="paper-card rounded-lg p-5 md:p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-medium" style={{ color: accent }}>{title}</h3>
-        <div className="mono text-sm" style={{ color: accent }}>฿{THB(total)}</div>
+        <div className="mono text-sm" style={{ color: accent }}>{hideNumbers ? "฿••••••" : `฿${THB(total)}`}</div>
       </div>
 
       <div className="space-y-1 mb-4 min-h-[20px]">
@@ -1645,7 +1663,7 @@ function LedgerColumn({ title, accent, items, form, setForm, onAdd, onDelete, ed
             <div className="flex items-center justify-between">
               <span className="ui-sans text-sm">{item.name}</span>
               <div className="flex items-center gap-2.5">
-                <span className="mono text-sm">฿{THB(item.amount)}</span>
+                <span className="mono text-sm">{hideNumbers ? "฿••••" : `฿${THB(item.amount)}`}</span>
                 <button
                   onClick={() => onEditStart(item)}
                   className="opacity-0 group-hover:opacity-100 transition-opacity"
@@ -1727,7 +1745,7 @@ function LedgerColumn({ title, accent, items, form, setForm, onAdd, onDelete, ed
   );
 }
 
-function AssetColumn({ accent, items, form, setForm, onAdd, onDelete, editingId, onEditStart, onCancelEdit }) {
+function AssetColumn({ accent, items, form, setForm, onAdd, onDelete, editingId, onEditStart, onCancelEdit, hideNumbers }) {
   const [goalFilter, setGoalFilter] = useState(null);
   const [ownerFilter, setOwnerFilter] = useState(null);
 
@@ -1771,7 +1789,7 @@ function AssetColumn({ accent, items, form, setForm, onAdd, onDelete, editingId,
     <div className="paper-card rounded-lg p-5 md:p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-medium" style={{ color: accent }}>สินทรัพย์</h3>
-        <div className="mono text-sm" style={{ color: accent }}>฿{THB(total)}</div>
+        <div className="mono text-sm" style={{ color: accent }}>{hideNumbers ? "฿••••••" : `฿${THB(total)}`}</div>
       </div>
 
       {ownerOptions.length > 0 && (
@@ -1869,7 +1887,7 @@ function AssetColumn({ accent, items, form, setForm, onAdd, onDelete, editingId,
               <div className="flex items-center justify-between">
                 <span className="ui-sans text-sm">{item.name}</span>
                 <div className="flex items-center gap-2.5">
-                  <span className="mono text-sm">฿{THB(item.amount)}</span>
+                  <span className="mono text-sm">{hideNumbers ? "฿••••" : `฿${THB(item.amount)}`}</span>
                   <button
                     onClick={() => onEditStart(item)}
                     className="opacity-0 group-hover:opacity-100 transition-opacity"
