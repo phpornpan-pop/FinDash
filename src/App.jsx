@@ -3,7 +3,7 @@ import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend
 } from "recharts";
-import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Eye, EyeOff } from "lucide-react";
+import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, HeartPulse, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet, Eye, EyeOff } from "lucide-react";
 import * as XLSX from "xlsx";
 
 // 🛠️ แก้ไข path ให้ตรงกับตำแหน่งไฟล์จริงใน repo: src/lib/supabaseClient.js
@@ -63,6 +63,7 @@ const TABS = [
 const INSURANCE_CATEGORIES = [
   { key: "life", label: "ประกันชีวิต", icon: Heart, group: "person" },
   { key: "health", label: "ประกันสุขภาพ", icon: Stethoscope, group: "person" },
+  { key: "critical_illness", label: "ประกันโรคร้ายแรง", icon: HeartPulse, group: "person" },
   { key: "accident", label: "ประกันอุบัติเหตุ", icon: Zap, group: "person" },
   { key: "property_home", label: "ประกันบ้าน", icon: Home, group: "property" },
   { key: "property_car", label: "ประกันรถ", icon: Car, group: "property" },
