@@ -9,8 +9,6 @@ import * as XLSX from "xlsx";
 // 🛠️ แก้ไข path ให้ตรงกับตำแหน่งไฟล์จริงใน repo: src/lib/supabaseClient.js
 import { supabase, hasSupabase } from "./lib/supabaseClient";
 
-const STORAGE_KEY = "networth-ledger:data";
-
 // ---- palette: cream + blue ----
 const C = {
   bg: "#F4F2E9",         // cream background
@@ -381,16 +379,21 @@ export default function NetWorthLedger() {
   const [assetEditingId, setAssetEditingId] = useState(null);
   const [liabEditingId, setLiabEditingId] = useState(null);
 
-  // ➕ State เก็บข้อมูลผู้เข้าสู่ระบบ
+  // ➕ State เก็บข้อมูลผู้เข้าสู่ระบบ + สถานะตรวจสอบ session ตอนเปิดหน้าเว็บ
   const [user, setUser] = useState(null);
+  const [authChecked, setAuthChecked] = useState(false);
 
-  // ➕ useEffect ตรวจสอบสิทธิ์และดักฟังข้อมูลการล็อกอิน
+  // ➕ ตรวจสอบสิทธิ์และดักฟังข้อมูลการล็อกอิน/ล็อกเอาท์
   useEffect(() => {
-    if (!hasSupabase()) return;
+    if (!hasSupabase()) {
+      setAuthChecked(true);
+      return;
+    }
 
     // ตรวจหาบัญชีผู้ใช้เมื่อเปิดหน้าจอ
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
+      setAuthChecked(true);
     });
 
     // ดักฟังเหตุการณ์ล็อกอินเข้า/ออกจากระบบ
@@ -406,23 +409,27 @@ export default function NetWorthLedger() {
     if (hasSupabase()) {
       await supabase.auth.signOut();
     }
+    setData(null);
+    setSelectedPeriod(null);
+    setLoading(true);
   };
 
+  // ➕ โหลดข้อมูลของผู้ใช้คนนี้จากตาราง networth_data ใน Supabase (ข้อมูลผูกกับบัญชี ไม่ใช่เครื่อง)
   useEffect(() => {
+    if (!user) return;
+    setLoading(true);
     (async () => {
       try {
-        if (!window.storage) {
-          setRestoreNote("no-storage");
-        }
-        let result = null;
-        try {
-          result = await window.storage.get(STORAGE_KEY, false);
-        } catch (e) {
-          result = null;
-        }
-        if (result && result.value) {
-          const parsedRaw = JSON.parse(result.value);
-          const migrated = migrateIfNeeded(parsedRaw);
+        const { data: row, error: fetchError } = await supabase
+          .from("networth_data")
+          .select("data")
+          .eq("user_id", user.id)
+          .maybeSingle();
+
+        if (fetchError) throw fetchError;
+
+        if (row && row.data) {
+          const migrated = migrateIfNeeded(row.data);
           const finalData = ensureTaxPlanning(ensureInsurance(migrated || { periods: {} }));
           if (Object.keys(finalData.periods).length === 0) {
             const now = new Date();
@@ -434,7 +441,10 @@ export default function NetWorthLedger() {
           const keys = Object.keys(finalData.periods).sort(comparePeriods);
           setSelectedPeriod(keys[keys.length - 1]);
           if (migrated) {
-            window.storage.set(STORAGE_KEY, JSON.stringify(finalData), false).catch(() => {});
+            supabase
+              .from("networth_data")
+              .upsert({ user_id: user.id, data: finalData, updated_at: new Date().toISOString() })
+              .then(() => {});
           }
         } else {
           const now = new Date();
@@ -443,8 +453,9 @@ export default function NetWorthLedger() {
           const fresh = { periods: { [key]: emptyPeriod() }, insurance: [], taxPlanning: emptyTaxPlanningContainer() };
           setData(fresh);
           setSelectedPeriod(key);
-          setRestoreNote((prev) => prev || "fresh");
+          setRestoreNote("fresh");
         }
+        setError(null);
       } catch (e) {
         setError("โหลดข้อมูลไม่สำเร็จ เริ่มสมุดบัญชีใหม่แทน");
         const now = new Date();
@@ -456,13 +467,16 @@ export default function NetWorthLedger() {
         setLoading(false);
       }
     })();
-  }, []);
+  }, [user]);
 
   async function persist(next, attempt = 1) {
     setData(next);
     setSaving(true);
     try {
-      await window.storage.set(STORAGE_KEY, JSON.stringify(next), false);
+      const { error: saveError } = await supabase
+        .from("networth_data")
+        .upsert({ user_id: user.id, data: next, updated_at: new Date().toISOString() });
+      if (saveError) throw saveError;
       setError(null);
       setLastFailedData(null);
       setLastSavedAt(new Date());
@@ -986,7 +1000,42 @@ export default function NetWorthLedger() {
     persist({ ...data, taxPlanning: { people } });
   }
 
-  if (loading) {
+  // ➕ ยังไม่ได้ตั้งค่า Supabase (ไม่มี VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY) — แอปนี้ต้องใช้ Supabase เพื่อบันทึกข้อมูล
+  if (!hasSupabase()) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-5" style={{ background: C.bg }}>
+        <FontLoader />
+        <div className="paper-card rounded-lg p-8 max-w-md w-full text-center">
+          <ShieldCheck size={28} style={{ color: C.liability, margin: "0 auto" }} className="mb-3" />
+          <h2 className="text-lg font-medium mb-2 ui-sans">ยังไม่ได้ตั้งค่า Supabase</h2>
+          <p className="ui-sans text-sm" style={{ color: C.inkSoft }}>
+            แอปนี้ต้องเชื่อมต่อ Supabase เพื่อบันทึกข้อมูลของคุณ กรุณาตั้งค่า Environment Variables
+            <span className="mono block mt-2" style={{ color: C.ink }}>VITE_SUPABASE_URL</span>
+            <span className="mono block" style={{ color: C.ink }}>VITE_SUPABASE_ANON_KEY</span>
+            แล้ว deploy ใหม่อีกครั้ง
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ➕ กำลังตรวจสอบ session ตอนเปิดหน้าเว็บ
+  if (!authChecked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
+        <FontLoader />
+        <Loader2 className="animate-spin" size={28} style={{ color: C.accent }} />
+      </div>
+    );
+  }
+
+  // ➕ ยังไม่ได้ล็อกอิน — แสดงหน้าล็อกอิน/สมัครสมาชิกก่อนเข้าใช้งาน
+  if (!user) {
+    return <LoginScreen />;
+  }
+
+  // ➕ ล็อกอินแล้ว กำลังโหลดข้อมูลของบัญชีนี้จาก Supabase
+  if (loading || !data) {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: C.bg }}>
         <FontLoader />
@@ -1041,29 +1090,19 @@ export default function NetWorthLedger() {
               {saving ? "กำลังบันทึก…" : lastSavedAt ? `บันทึกล่าสุด ${lastSavedAt.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" })}` : "ยังไม่บันทึก"}
             </div>
             
-            {/* ดักเช็คเงื่อนไข UI: ล็อกอินออนไลน์ / โหมดออฟไลน์บราวเซอร์ / มีระบบออนไลน์แต่ยังไม่ล็อกอิน */}
-            {user ? (
-              <div className="flex items-center gap-2 mt-1 ui-sans text-xs">
-                <span className="px-2.5 py-1 rounded-full flex items-center gap-1 font-medium" style={{ background: C.accentSoft, color: C.ink }}>
-                  <User size={12} /> {user.email}
-                </span>
-                <button 
-                  onClick={handleLogout} 
-                  className="underline hover:text-red-500 transition-colors"
-                  style={{ color: C.muted }}
-                >
-                  ออกจากระบบ
-                </button>
-              </div>
-            ) : !hasSupabase() ? (
-              <span className="ui-sans text-xs px-2.5 py-1 rounded mt-1 font-medium" style={{ background: C.border, color: C.inkSoft }}>
-                โหมดใช้งานบนบราวเซอร์ (Offline)
+            {/* ผู้ใช้ล็อกอินอยู่เสมอตรงนี้ เพราะแอปถูก gate ไว้ด้วย LoginScreen ก่อนหน้านี้แล้ว */}
+            <div className="flex items-center gap-2 mt-1 ui-sans text-xs">
+              <span className="px-2.5 py-1 rounded-full flex items-center gap-1 font-medium" style={{ background: C.accentSoft, color: C.ink }}>
+                <User size={12} /> {user.email}
               </span>
-            ) : (
-              <span className="ui-sans text-xs mt-1 font-medium" style={{ color: C.liability }}>
-                ยังไม่ได้เข้าสู่ระบบ
-              </span>
-            )}
+              <button
+                onClick={handleLogout}
+                className="underline hover:text-red-500 transition-colors"
+                style={{ color: C.muted }}
+              >
+                ออกจากระบบ
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1427,6 +1466,158 @@ export default function NetWorthLedger() {
 function FontLoader() {
   return (
     <style>{`@import url('https://fonts.googleapis.com/css2?family=Prompt:wght@300;400;500;600;700&display=swap');`}</style>
+  );
+}
+
+// ➕ หน้าล็อกอิน/สมัครสมาชิกด้วยอีเมล+รหัสผ่านผ่าน Supabase Auth
+// ต้องล็อกอินก่อนถึงจะเข้าใช้งานแอปได้ เพราะข้อมูลถูกผูกไว้กับบัญชีผู้ใช้แต่ละคน
+function LoginScreen() {
+  const [mode, setMode] = useState("signin"); // "signin" | "signup"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [message, setMessage] = useState(null);
+  const [messageType, setMessageType] = useState("error"); // "error" | "success"
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setMessage("กรุณากรอกอีเมลและรหัสผ่าน");
+      setMessageType("error");
+      return;
+    }
+    setSubmitting(true);
+    setMessage(null);
+    try {
+      if (mode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password,
+        });
+        if (error) throw error;
+      } else {
+        const { error } = await supabase.auth.signUp({
+          email: email.trim(),
+          password,
+        });
+        if (error) throw error;
+        setMessage("สมัครสมาชิกสำเร็จ! ถ้าระบบเปิดใช้การยืนยันอีเมล กรุณาเช็คอีเมลของคุณก่อนเข้าสู่ระบบ");
+        setMessageType("success");
+      }
+    } catch (err) {
+      setMessage(err.message === "Invalid login credentials" ? "อีเมลหรือรหัสผ่านไม่ถูกต้อง" : err.message || "เกิดข้อผิดพลาด กรุณาลองใหม่");
+      setMessageType("error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function sendResetLink() {
+    if (!email.trim()) {
+      setMessage("กรุณากรอกอีเมลก่อนกดลืมรหัสผ่าน");
+      setMessageType("error");
+      return;
+    }
+    setSubmitting(true);
+    setMessage(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
+      if (error) throw error;
+      setMessage("ส่งลิงก์ตั้งรหัสผ่านใหม่ไปที่อีเมลของคุณแล้ว");
+      setMessageType("success");
+    } catch (err) {
+      setMessage(err.message || "ส่งลิงก์ไม่สำเร็จ กรุณาลองใหม่");
+      setMessageType("error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen w-full app-font flex items-center justify-center px-5" style={{ background: C.bg, color: C.ink }}>
+      <FontLoader />
+      <style>{`
+        .app-font { font-family: 'Prompt', sans-serif; }
+        .ui-sans { font-family: 'Prompt', sans-serif; }
+        input:focus, button:focus-visible { outline: 2px solid ${C.accent}; outline-offset: 1px; }
+      `}</style>
+      <div className="paper-card rounded-lg p-8 w-full max-w-sm">
+        <div className="flex items-center gap-2 ui-sans text-xs tracking-[0.2em] uppercase mb-1" style={{ color: C.muted }}>
+          <BookOpen size={14} />
+          FinDash
+        </div>
+        <h1 className="text-2xl font-medium mb-6">
+          {mode === "signin" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+        </h1>
+
+        <form onSubmit={submit} className="space-y-3">
+          <div>
+            <label className="ui-sans text-xs block mb-1" style={{ color: C.muted }}>อีเมล</label>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              autoComplete="email"
+              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
+              style={{ border: `1px solid ${C.border}` }}
+            />
+          </div>
+          <div>
+            <label className="ui-sans text-xs block mb-1" style={{ color: C.muted }}>รหัสผ่าน</label>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="อย่างน้อย 6 ตัวอักษร"
+              autoComplete={mode === "signin" ? "current-password" : "new-password"}
+              className="ui-sans w-full px-3 py-2 rounded text-sm bg-transparent"
+              style={{ border: `1px solid ${C.border}` }}
+            />
+          </div>
+
+          {message && (
+            <div
+              className="px-3 py-2 rounded ui-sans text-xs"
+              style={
+                messageType === "success"
+                  ? { background: C.accentSoft, color: C.inkSoft, border: `1px solid ${C.border}` }
+                  : { background: C.errorBg, color: C.errorText, border: `1px solid ${C.errorBorder}` }
+              }
+            >
+              {message}
+            </div>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded ui-sans text-sm font-medium"
+            style={{ background: C.ink, color: C.paper, opacity: submitting ? 0.6 : 1 }}
+          >
+            {submitting ? <Loader2 size={16} className="animate-spin" /> : null}
+            {mode === "signin" ? "เข้าสู่ระบบ" : "สมัครสมาชิก"}
+          </button>
+        </form>
+
+        <div className="flex items-center justify-between mt-4 ui-sans text-xs">
+          <button
+            onClick={() => {
+              setMode(mode === "signin" ? "signup" : "signin");
+              setMessage(null);
+            }}
+            style={{ color: C.accent }}
+          >
+            {mode === "signin" ? "ยังไม่มีบัญชี? สมัครสมาชิก" : "มีบัญชีแล้ว? เข้าสู่ระบบ"}
+          </button>
+          {mode === "signin" && (
+            <button onClick={sendResetLink} style={{ color: C.muted }}>
+              ลืมรหัสผ่าน?
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
