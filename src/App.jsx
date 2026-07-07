@@ -6,8 +6,8 @@ import {
 import { Plus, Trash2, TrendingUp, TrendingDown, BookOpen, Loader2, Target, RefreshCw, RotateCcw, Download, Upload, CheckCircle2, User, Heart, Stethoscope, Zap, Home, Car, ShieldCheck, CalendarDays, ChevronDown, ChevronUp, Pencil, X, Calculator, Info, FileSpreadsheet } from "lucide-react";
 import * as XLSX from "xlsx";
 
-// 🛠️ แก้ไข Path การ Import ตัวเชื่อมต่อให้ตรงกับโครงสร้างโฟลเดอร์ของคุณเรียบร้อยแล้ว
-import { supabase, hasSupabase } from "../supabase/supabase"; 
+// 🛠️ แก้ไข path ให้ตรงกับตำแหน่งไฟล์จริงใน repo: src/lib/supabaseClient.js
+import { supabase, hasSupabase } from "./lib/supabaseClient";
 
 const STORAGE_KEY = "networth-ledger:data";
 
